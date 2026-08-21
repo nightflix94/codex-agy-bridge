@@ -13,6 +13,7 @@ from pathlib import Path
 
 DEFAULT_TMUX_TIMEOUT_SECONDS = 2.0
 DEFAULT_CHILD_START_TIMEOUT_SECONDS = 2.0
+AUTO_ATTACH_DISABLED = frozenset({"0", "false", "no"})
 CONTROL_STRING_RE = re.compile(
     r"(?:\x1b[P^_X]|[\x90\x98\x9e\x9f]).*?(?:\x1b\\|\x9c)",
     re.DOTALL,
@@ -284,6 +285,17 @@ def process_alive(pid: int) -> bool:
 def release_child(path: Path) -> None:
     """Release a PID-published wrapper to exec the Antigravity command."""
     path.touch(mode=0o600, exist_ok=False)
+
+
+def auto_attach_enabled() -> bool:
+    """Return whether a run may open a macOS Terminal without being asked.
+
+    Only automatic attach consults this. An explicitly requested terminal, and
+    the authentication flow that exists to show the user a window, must still
+    open one or they would report success while doing nothing.
+    """
+    configured = os.environ.get("AGY_BRIDGE_AUTO_ATTACH", "1")
+    return configured.strip().lower() not in AUTO_ATTACH_DISABLED
 
 
 def attach(session: str, *, check: bool = False) -> None:

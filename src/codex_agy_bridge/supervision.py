@@ -55,6 +55,8 @@ class RunSupervisor:
             if self.conversation_id
             else None
         )
+        if self.harvester is not None:
+            self.harvester.fast_forward()
         self.next_conversation_probe_at = 0.0
         self.conversation_probe_delay = 1.0
         self.latest_response_step_index = -1
@@ -188,6 +190,10 @@ class RunSupervisor:
             or not self.session
         ):
             return
+        if not terminal.auto_attach_enabled():
+            # Opting out of automatic attach asks for a detached session, so
+            # the foreground invariant below must not fail the Run instead.
+            return
         # A foreground Run is only valid when its human terminal can be opened.
         # Do not silently continue with a detached session: execute() will stop it
         # and persist a failed Run if macOS Terminal cannot attach.
@@ -277,8 +283,14 @@ class RunSupervisor:
                     and isinstance(record.get("step_index"), int)
                 ):
                     self.latest_response_step_index = record["step_index"]
-                    self.done_response_step_index = record["step_index"]
-                    self.done_response_seen_at = time.monotonic()
+                    if record.get("tool_calls"):
+                        # Narration before a tool call, not an answer: the run
+                        # is still working, so it must not look idle-complete.
+                        self.done_response_step_index = None
+                        self.done_response_seen_at = None
+                    else:
+                        self.done_response_step_index = record["step_index"]
+                        self.done_response_seen_at = time.monotonic()
             if latest_step > self.latest_transcript_step_index:
                 self.latest_transcript_step_index = latest_step
                 self.transcript_advanced_at = time.monotonic()

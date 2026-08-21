@@ -140,10 +140,11 @@ class CompletionMonitor:
             )
         if cleaned:
             return CompletionOutcome("completed", cleaned, None)
-        if self.expected_file_error() is None:
+        expected_file = self.state.get("expected_file")
+        if expected_file and self.expected_file_error() is None:
             return CompletionOutcome(
                 "completed",
-                f"Expected file written: {self.state['expected_file']}",
+                f"Expected file written: {expected_file}",
                 None,
             )
         return CompletionOutcome(

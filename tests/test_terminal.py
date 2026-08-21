@@ -278,6 +278,44 @@ def test_terminal_attach_opens_terminal_app(monkeypatch):
     }
 
 
+def test_terminal_attach_still_opens_when_auto_attach_is_disabled(monkeypatch):
+    calls = []
+    monkeypatch.setenv("AGY_BRIDGE_AUTO_ATTACH", "0")
+    monkeypatch.setattr(
+        terminal.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs))
+        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+    )
+
+    terminal.attach("agy-target", check=True)
+
+    assert calls, "an explicitly requested terminal must open regardless"
+    assert not terminal.auto_attach_enabled()
+
+
+@pytest.mark.parametrize(
+    ("configured", "enabled"),
+    [
+        (None, True),
+        ("1", True),
+        ("true", True),
+        ("0", False),
+        ("false", False),
+        ("NO", False),
+        (" no ", False),
+        ("", True),
+    ],
+)
+def test_auto_attach_enabled_reads_the_environment(monkeypatch, configured, enabled):
+    if configured is None:
+        monkeypatch.delenv("AGY_BRIDGE_AUTO_ATTACH", raising=False)
+    else:
+        monkeypatch.setenv("AGY_BRIDGE_AUTO_ATTACH", configured)
+
+    assert terminal.auto_attach_enabled() is enabled
+
+
 def test_terminal_attach_escapes_session_for_shell_and_applescript(monkeypatch):
     calls = []
     monkeypatch.setattr(

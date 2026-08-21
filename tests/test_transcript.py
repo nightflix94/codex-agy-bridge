@@ -51,6 +51,101 @@ def test_first_poll_reads_existing_records_and_second_reads_only_appends(tmp_pat
     assert harvester.poll() == [second]
 
 
+def test_tool_calling_planner_response_is_not_a_final_response(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    narration = _record(1, content="I will run `git status`.")
+    narration["tool_calls"] = [{"name": "run_command"}]
+    answer = _record(3, content="Done. Both checks pass.")
+    _write_records(path, narration, answer)
+    harvester = TranscriptHarvester("conversation-1", path)
+
+    assert harvester.poll() == [narration, answer]
+    assert harvester.latest_response == "Done. Both checks pass."
+    assert ConversationTranscript("conversation-1", path).final_response() == (
+        "Done. Both checks pass."
+    )
+
+
+def test_final_response_ignores_a_trailing_tool_call_step(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    narration = _record(2, content="I will run `git diff` next.")
+    narration["tool_calls"] = [{"name": "run_command"}]
+    _write_records(path, narration)
+    harvester = TranscriptHarvester("conversation-1", path)
+
+    assert harvester.poll() == [narration]
+    assert harvester.latest_response is None
+    assert ConversationTranscript("conversation-1", path).final_response() is None
+
+
+def test_fast_forward_treats_existing_records_as_history(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    history = _record(4, content="earlier response")
+    appended = _record(5, content="new response")
+    _write_records(path, history)
+    harvester = TranscriptHarvester("conversation-1", path)
+
+    assert harvester.fast_forward() == 4
+    assert harvester.poll() == []
+    assert harvester.latest_response is None
+    assert harvester.latest_step_index == 4
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(appended) + "\n")
+
+    assert harvester.poll() == [appended]
+    assert harvester.latest_response == "new response"
+
+
+def test_reader_reset_keeps_the_continuation_watermark(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    history = _record(4, content="previous run response")
+    appended = _record(5, content="this run response")
+    _write_records(path, history)
+    harvester = TranscriptHarvester("conversation-1", path)
+    assert harvester.fast_forward() == 4
+
+    path.unlink()
+    assert harvester.poll() == []
+
+    _write_records(path, history)
+
+    assert harvester.poll() == []
+    assert harvester.latest_response is None
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(appended) + "\n")
+
+    assert harvester.poll() == [appended]
+    assert harvester.latest_response == "this run response"
+
+
+def test_truncated_continuation_does_not_replay_history(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    history = _record(4, content="previous run response")
+    _write_records(path, history, _record(5))
+    harvester = TranscriptHarvester("conversation-1", path)
+    assert harvester.fast_forward() == 5
+
+    _write_records(path, history)
+
+    assert harvester.poll() == []
+    assert harvester.latest_response is None
+
+
+def test_fast_forward_on_a_missing_file_keeps_every_later_record(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    harvester = TranscriptHarvester("conversation-1", path)
+
+    assert harvester.fast_forward() == -1
+
+    first = _record(0, content="first response")
+    _write_records(path, first)
+
+    assert harvester.poll() == [first]
+    assert harvester.latest_response == "first response"
+
+
 def test_partial_json_is_completed_on_next_poll(tmp_path):
     path = tmp_path / "transcript.jsonl"
     record = _record(1)

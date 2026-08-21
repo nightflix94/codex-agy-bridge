@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from codex_agy_bridge import (
@@ -24,6 +26,19 @@ class FakeClock:
 
     def advance(self, seconds: float) -> None:
         self.value += seconds
+
+
+def _write_transcript(path, *records: dict[str, object]) -> None:
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def _append_transcript(path, *records: dict[str, object]) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record) + "\n")
 
 
 def allow_worker_lifecycle(monkeypatch, state, updates=None):
@@ -68,6 +83,9 @@ def test_supervisor_classifies_successful_exit(monkeypatch, tmp_path):
 
         def __init__(self, _conversation_id, _path):
             pass
+
+        def fast_forward(self):
+            return -1
 
         def poll(self):
             return []
@@ -114,6 +132,9 @@ def test_supervisor_does_not_complete_on_finally_waiting_text(monkeypatch, tmp_p
 
         def __init__(self, _conversation_id, _path):
             pass
+
+        def fast_forward(self):
+            return -1
 
         def poll(self):
             return []
@@ -414,6 +435,9 @@ def test_supervisor_emits_progress_stalled_after_transcript_idle(
         def __init__(self, _conversation_id, _path):
             pass
 
+        def fast_forward(self):
+            return -1
+
         def poll(self):
             return polls.pop(0) if polls else []
 
@@ -500,6 +524,9 @@ def test_supervisor_never_completes_without_a_recorded_child_exit_code(
         def __init__(self, _conversation_id, _path):
             pass
 
+        def fast_forward(self):
+            return -1
+
         def poll(self):
             return []
 
@@ -583,6 +610,9 @@ def test_supervisor_classifies_nonzero_exit_with_partial_response_as_failed(
 
         def __init__(self, _conversation_id, _path):
             pass
+
+        def fast_forward(self):
+            return -1
 
         def poll(self):
             return []
@@ -1083,6 +1113,169 @@ def test_supervisor_treats_stable_done_response_as_completed_without_marker(
     assert supervisor._completion_is_stable("final response")
 
 
+def _foreground_state(tmp_path):
+    return {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "execution_surface": "foreground",
+        "human_attachable": True,
+        "tmux_session": "agy-run-1",
+    }
+
+
+def test_foreground_run_opens_its_terminal_by_default(monkeypatch, tmp_path):
+    state = _foreground_state(tmp_path)
+    attached = []
+    monkeypatch.delenv("AGY_BRIDGE_AUTO_ATTACH", raising=False)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.terminal.attach",
+        lambda session, **kwargs: attached.append((session, kwargs)),
+    )
+
+    supervisor = RunSupervisor("run-1")
+    supervisor.session = "agy-run-1"
+    supervisor._auto_open_terminal()
+
+    assert attached == [("agy-run-1", {"check": True})]
+
+
+def test_disabled_auto_attach_leaves_a_foreground_run_detached(monkeypatch, tmp_path):
+    state = _foreground_state(tmp_path)
+    attached = []
+    monkeypatch.setenv("AGY_BRIDGE_AUTO_ATTACH", "0")
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.terminal.attach",
+        lambda session, **kwargs: attached.append((session, kwargs)),
+    )
+
+    supervisor = RunSupervisor("run-1")
+    supervisor.session = "agy-run-1"
+    supervisor._auto_open_terminal()
+
+    assert attached == []
+
+
+def test_supervisor_does_not_complete_on_intermediate_planner_response(
+    monkeypatch, tmp_path
+):
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "requested_conversation_id": "conversation-1",
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    narration = "I will run `git status` to inspect the worktree."
+    clock = FakeClock(100.0)
+
+    class FakeHarvester:
+        latest_response = None
+
+        def __init__(self, _conversation_id, _path):
+            self.records = [
+                {
+                    "step_index": 2,
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "content": narration,
+                    "tool_calls": [{"name": "run_command"}],
+                }
+            ]
+
+        def fast_forward(self):
+            return -1
+
+        def poll(self):
+            records, self.records = self.records, []
+            return records
+
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.TranscriptHarvester",
+        FakeHarvester,
+    )
+
+    supervisor = RunSupervisor("run-1")
+    supervisor.completion_idle_seconds = 2.0
+    supervisor._observe_conversation()
+
+    assert supervisor.latest_transcript_step_index == 2
+    assert supervisor.done_response_step_index is None
+
+    clock.advance(30.0)
+
+    assert not supervisor._completion_is_stable(narration)
+
+
+def test_continuation_run_ignores_prior_conversation_steps(monkeypatch, tmp_path):
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "requested_conversation_id": "conversation-1",
+        "completion_marker": "DONE_MARKER",
+        "prompt": "continue now",
+    }
+    transcript = tmp_path / "transcript.jsonl"
+    _write_transcript(
+        transcript,
+        {
+            "step_index": 4,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "content": "I will run `git diff` on the frontend files.",
+            "tool_calls": [{"name": "run_command"}],
+        },
+    )
+    clock = FakeClock(100.0)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "transcript_path",
+        lambda _conversation_id: transcript,
+    )
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+
+    supervisor = RunSupervisor("run-1")
+    supervisor.completion_idle_seconds = 2.0
+    supervisor._observe_conversation()
+
+    assert supervisor._response() is None
+    assert supervisor.done_response_step_index is None
+
+    clock.advance(30.0)
+
+    assert not supervisor._completion_is_stable(supervisor._response())
+
+    _append_transcript(
+        transcript,
+        {
+            "step_index": 5,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "content": "Fixed the layout and ran the checks. DONE_MARKER",
+        },
+    )
+    supervisor._observe_conversation()
+
+    assert supervisor._response() == "Fixed the layout and ran the checks. DONE_MARKER"
+    assert supervisor._completion_is_stable(supervisor._response())
+
+
 def test_supervisor_completes_when_feedback_prompt_advances_transcript(
     monkeypatch, tmp_path
 ):
@@ -1389,6 +1582,9 @@ def test_supervisor_polls_once_for_progress_and_completion(monkeypatch, tmp_path
             assert conversation_id == "conversation-1"
             assert path == tmp_path / "transcript.jsonl"
 
+        def fast_forward(self):
+            return -1
+
         def poll(self):
             polls.append(True)
             return [{"step_index": 7}]
@@ -1436,6 +1632,9 @@ def test_supervisor_emits_attention_for_stable_approval_prompt(monkeypatch, tmp_
 
         def __init__(self, _conversation_id, _path):
             pass
+
+        def fast_forward(self):
+            return -1
 
         def poll(self):
             return [{"content": "Do you want to proceed?", "step_index": 4}]

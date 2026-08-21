@@ -46,11 +46,19 @@ def transcript_path(conversation_id: str, *, brain_dir: Path) -> Path:
 
 
 def _planner_response(record: dict[str, Any]) -> str | None:
+    """Project a record onto a final answer, ignoring pending tool work.
+
+    A PLANNER_RESPONSE reaches status DONE once the model finishes emitting
+    that one block, which for a tool-calling step is the narration preceding
+    the call ("I will run `git status`..."). Only a response that requests no
+    further tool work can be the Conversation's answer.
+    """
     content = record.get("content")
     if (
         record.get("source") == "MODEL"
         and record.get("type") == "PLANNER_RESPONSE"
         and record.get("status") == "DONE"
+        and not record.get("tool_calls")
         and isinstance(content, str)
         and content.strip()
     ):
@@ -69,6 +77,7 @@ class ConversationTranscript:
         self.pending = b""
         self.latest_response: str | None = None
         self.latest_step_index = -1
+        self.baseline_step_index = -1
         self._head = b""
 
     @classmethod
@@ -103,6 +112,32 @@ class ConversationTranscript:
             if isinstance(value, dict):
                 steps.append(value)
         return steps
+
+    def fast_forward(self) -> int:
+        """Treat every already-written record as history, not as new output.
+
+        A resumed Conversation starts with a populated transcript. Without a
+        baseline the first poll replays the previous run's steps as if this run
+        had just produced them.
+        """
+        baseline = self.baseline_step_index
+        for step in self.read_steps():
+            index = step.get("step_index")
+            if isinstance(index, int) and index > baseline:
+                baseline = index
+        try:
+            with self.path.open("rb") as handle:
+                stat = os.fstat(handle.fileno())
+                self.identity = FileIdentity(stat.st_dev, stat.st_ino)
+                self._head = handle.read(min(64, stat.st_size))
+                self.offset = stat.st_size
+        except OSError:
+            self._reset()
+            return self.baseline_step_index
+        self.pending = b""
+        self.baseline_step_index = baseline
+        self.latest_step_index = baseline
+        return baseline
 
     def latest_step(self) -> dict[str, Any] | None:
         steps = self.compact_steps(limit=1)
@@ -206,6 +241,9 @@ class ConversationTranscript:
                 continue
             if not isinstance(value, dict):
                 continue
+            index = value.get("step_index")
+            if isinstance(index, int) and index <= self.baseline_step_index:
+                continue
             records.append(value)
             self._observe(value)
         return records
@@ -219,6 +257,14 @@ class ConversationTranscript:
             self.latest_response = response
 
     def _reset(self) -> None:
+        """Rewind the incremental reader, keeping the continuation watermark.
+
+        A reset re-reads the file from the start, so a resumed run would
+        otherwise re-ingest the steps fast_forward() classified as history and
+        complete on a previous run's response. Antigravity appends to this file
+        and never renumbers it, so the watermark stays meaningful across the
+        replacement, truncation, and disappearance that trigger a reset.
+        """
         self.identity = None
         self.offset = 0
         self.pending = b""
