@@ -8,3 +8,4 @@ build/
 *.egg-info/
 .codex-review-batch/
 .pi-subagents/
+.DS_Store
