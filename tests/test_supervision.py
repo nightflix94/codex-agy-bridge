@@ -15,6 +15,7 @@ from codex_agy_bridge import (
 from codex_agy_bridge.store import DiskRunStore
 from codex_agy_bridge.supervision import RunSupervisor, _marker_is_echoed_task_prompt
 from codex_agy_bridge.task_packet import format_task_packet
+from codex_agy_bridge.terminal import TmuxCommandError
 
 
 class FakeClock:
@@ -1406,7 +1407,10 @@ def test_interactive_supervisor_fails_after_extended_hard_timeout(
         "execution_mode": "interactive",
     }
     active = iter([True, False])
-    monotonic = iter([0.0, 0.0, 10_000.0, 10_000.0])
+    # Time is pinned at launch, then races past the deadline. Falling back to
+    # the late value keeps this from asserting how many times the supervisor
+    # happens to read the clock.
+    startup = iter([0.0, 0.0, 0.0])
     stopped = []
     updates = []
     monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
@@ -1420,7 +1424,7 @@ def test_interactive_supervisor_fails_after_extended_hard_timeout(
     )
     monkeypatch.setattr(
         "codex_agy_bridge.supervision.time.monotonic",
-        lambda: next(monotonic),
+        lambda: next(startup, 10_000.0),
     )
     monkeypatch.setattr("codex_agy_bridge.supervision.time.sleep", lambda _delay: None)
     supervisor = RunSupervisor("run-1")
@@ -1818,3 +1822,107 @@ def test_reflowed_task_echo_is_not_a_completion_marker():
     assert (
         _marker_is_echoed_task_prompt(answered, answered.rfind("DONE_MARKER")) is False
     )
+
+
+def test_supervisor_reports_a_conversation_that_never_correlates(
+    monkeypatch, tmp_path
+):
+    """Correlation failure must not be silent.
+
+    Every other signal - completion, result, progress stall - is derived from
+    a transcript, so a Run that never correlates reports nothing at all and
+    reads to the operator as healthy.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "tmux_session": "agy-run-1",
+    }
+    clock = FakeClock()
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    supervisor = RunSupervisor("run-1")
+    supervisor.correlation_warn_seconds = 30.0
+
+    supervisor._observe_correlation()
+    clock.advance(31.0)
+    supervisor._observe_correlation()
+    supervisor._observe_correlation()
+    clock.advance(31.0)
+    supervisor._observe_correlation()
+
+    events = [
+        event
+        for event in session_events.read_events(tmp_path)
+        if event["kind"] == "conversation_unresolved"
+    ]
+    assert len(events) == 2
+    assert events[0]["severity"] == "warning"
+    assert events[0]["observed"]["activity_state"] == "uncorrelated"
+    assert events[0]["observed"]["uncorrelated_seconds"] == 31
+    assert events[1]["observed"]["uncorrelated_seconds"] == 62
+
+
+def test_supervisor_stops_reporting_once_the_conversation_correlates(
+    monkeypatch, tmp_path
+):
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "tmux_session": "agy-run-1",
+    }
+    clock = FakeClock()
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    supervisor = RunSupervisor("run-1")
+    supervisor.correlation_warn_seconds = 30.0
+
+    clock.advance(31.0)
+    supervisor.conversation_id = "conversation-1"
+    supervisor._observe_correlation()
+
+    assert not [
+        event
+        for event in session_events.read_events(tmp_path)
+        if event["kind"] == "conversation_unresolved"
+    ]
+
+
+def test_failed_terminal_attach_leaves_a_foreground_run_detached(
+    monkeypatch, tmp_path
+):
+    """A cosmetic window failing to open must not destroy the Run.
+
+    osascript can time out transiently. Killing a Run over it loses work that
+    has not started yet, so the surface degrades to detached and says so.
+    """
+    state = _foreground_state(tmp_path)
+    monkeypatch.delenv("AGY_BRIDGE_AUTO_ATTACH", raising=False)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+
+    def refuse(_session, **_kwargs):
+        raise TmuxCommandError(command=["osascript"], reason="timeout")
+
+    monkeypatch.setattr("codex_agy_bridge.supervision.terminal.attach", refuse)
+    supervisor = RunSupervisor("run-1")
+    supervisor.session = "agy-run-1"
+
+    supervisor._auto_open_terminal()
+
+    events = [
+        event
+        for event in session_events.read_events(tmp_path)
+        if event["kind"] == "terminal_attach_failed"
+    ]
+    assert len(events) == 1
+    assert events[0]["severity"] == "warning"
+    assert events[0]["observed"]["surface"] == "detached"

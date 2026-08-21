@@ -650,6 +650,7 @@ ATTENTION_EVENTS = {
     "needs_attention",
     "mcp_input_failed",
     "progress_stalled",
+    "conversation_unresolved",
     "run_completed",
     "run_failed",
     "run_canceled",

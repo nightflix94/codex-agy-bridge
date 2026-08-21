@@ -314,3 +314,40 @@ def test_wait_for_runs_all_terminal_matches_when_every_run_is_terminal(tmp_path)
         "run_completed",
         "run_failed",
     }
+
+
+def test_wait_for_runs_attention_wakes_on_unresolved_conversation(tmp_path):
+    """An uncorrelated Run must reach a caller that is waiting on attention.
+
+    Without this the warning is written to the event log and nothing ever
+    reads it, which is the silence the event exists to break.
+    """
+    state_root = tmp_path / "state"
+    run_dir = core.run_dir("run-1", state_root=state_root)
+    core.atomic_write_json(
+        core.state_path("run-1", state_root=state_root),
+        {"run_id": "run-1", "status": "running"},
+    )
+    first = session_events.append_event(run_dir, "run_started")
+    unresolved = session_events.append_event(
+        run_dir,
+        "conversation_unresolved",
+        {
+            "severity": "warning",
+            "observed": {
+                "activity_state": "uncorrelated",
+                "uncorrelated_seconds": 45,
+            },
+        },
+    )
+
+    result = wait_for_runs(
+        {"run-1": run_dir},
+        state_root=state_root,
+        condition="any_attention",
+        after={"run-1": first["event_id"]},
+        timeout_seconds=0,
+    )
+
+    assert result["matched"] is True
+    assert result["events"] == [unresolved]

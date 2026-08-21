@@ -78,6 +78,11 @@ class RunSupervisor:
         self.interactive_timeout_grace_seconds = float(
             os.environ.get("AGY_BRIDGE_INTERACTIVE_TIMEOUT_GRACE_SECONDS", "3600")
         )
+        self.correlation_warn_seconds = float(
+            os.environ.get("AGY_BRIDGE_CORRELATION_WARN_SECONDS", "45")
+        )
+        self.next_correlation_event_at: float | None = None
+        self.launched_monotonic = time.monotonic()
         self.interactive_waiting_after_step: int | None = None
         self.done_response_step_index: int | None = None
         self.done_response_seen_at: float | None = None
@@ -140,6 +145,7 @@ class RunSupervisor:
     def _launch(self) -> bool:
         command = runtime.build_command(self.state)
         self.launched_at = time.time()
+        self.launched_monotonic = time.monotonic()
         core.write_private_text(
             self.progress_path,
             "Starting Antigravity. Waiting for transcript events...\n",
@@ -194,10 +200,31 @@ class RunSupervisor:
             # Opting out of automatic attach asks for a detached session, so
             # the foreground invariant below must not fail the Run instead.
             return
-        # A foreground Run is only valid when its human terminal can be opened.
-        # Do not silently continue with a detached session: execute() will stop it
-        # and persist a failed Run if macOS Terminal cannot attach.
-        terminal.attach(self.session, check=True)
+        # A foreground Run wants a human terminal, but osascript can fail
+        # transiently and the window is cosmetic: the Run works detached. Do
+        # not destroy work over it, and do not continue silently either -
+        # report the degraded surface so the terminal is known to be absent.
+        try:
+            terminal.attach(self.session, check=True)
+        except terminal.TmuxCommandError as error:
+            session_events.append_event(
+                self.directory,
+                "terminal_attach_failed",
+                {
+                    "category": "terminal",
+                    "severity": "warning",
+                    "source": "runner",
+                    "observed": {
+                        "activity_state": "working",
+                        "surface": "detached",
+                        "error": str(error),
+                        "remedy": (
+                            "Attach manually with "
+                            f"tmux attach-session -t {self.session}"
+                        ),
+                    },
+                },
+            )
 
     def _monitor_until_exit(self) -> int | None:
         deadline = time.monotonic() + self._hard_timeout_seconds()
@@ -207,6 +234,7 @@ class RunSupervisor:
                 self._finish(status="canceled")
                 return 0
             self._observe_conversation()
+            self._observe_correlation()
             stall_error = self._observe_progress_stall()
             if stall_error is not None:
                 self._stop()
@@ -294,6 +322,51 @@ class RunSupervisor:
                     progress_log=self.progress_path,
                 )
             self._observe_prompt(records)
+
+    def _observe_correlation(self) -> None:
+        """Report a Run whose Conversation has not correlated yet.
+
+        Completion, results, and progress stalls are all derived from the
+        transcript, so a Run that never correlates emits nothing at all and
+        reads as healthy while doing nothing observable. Warn on a bounded
+        interval instead, and keep warning while it stays uncorrelated.
+        """
+        if self.conversation_id or self.correlation_warn_seconds <= 0:
+            return
+        now = time.monotonic()
+        uncorrelated_seconds = int(now - self.launched_monotonic)
+        if uncorrelated_seconds < self.correlation_warn_seconds:
+            return
+        if (
+            self.next_correlation_event_at is not None
+            and now < self.next_correlation_event_at
+        ):
+            return
+        self.next_correlation_event_at = now + self.correlation_warn_seconds
+        next_call = harness_contract.terminal_observe_call(self.run_id)
+        session_events.append_event(
+            self.directory,
+            "conversation_unresolved",
+            {
+                "category": "progress",
+                "severity": "warning",
+                "source": "runner",
+                "dedupe_key": (
+                    f"conversation_unresolved:{self.run_id}:{uncorrelated_seconds}"
+                ),
+                "observed": {
+                    "activity_state": "uncorrelated",
+                    "uncorrelated_seconds": uncorrelated_seconds,
+                    "detail": (
+                        "No Antigravity Conversation matched this Run's prompt, so "
+                        "transcript progress and completion cannot be observed. "
+                        "Terminal evidence is still being read."
+                    ),
+                    "suggested_next_tool": next_call["tool"],
+                    "suggested_next_arguments": next_call["arguments"],
+                },
+            },
+        )
 
     def _observe_progress_stall(self) -> str | None:
         if (
