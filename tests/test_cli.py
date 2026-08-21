@@ -310,3 +310,27 @@ def test_cli_rejects_unrecognized_plugin_list_lines(monkeypatch):
 
     with pytest.raises(RuntimeError, match="unrecognized plugin list output"):
         AntigravityCli(executable="agy").plugins()
+
+
+def test_validate_model_accepts_either_published_identifier(monkeypatch):
+    """agy models prints "<id>\\tDisplay Name", so both halves are valid.
+
+    Comparing a caller's model against the raw line matched neither half and
+    rejected every real model, which made the model argument unusable.
+    """
+    listing = (
+        "gemini-3.7-flash-high\tGemini 3.7 Flash (High)\n"
+        "gemini-3.5-flash-medium\tGemini 3.5 Flash (Medium)\n"
+    )
+    monkeypatch.setattr(
+        "codex_agy_bridge.cli.subprocess.run",
+        lambda _command, **_kwargs: completed(listing),
+    )
+    cli = AntigravityCli(executable="agy")
+
+    cli.validate_model("Gemini 3.7 Flash (High)")
+    cli.validate_model("gemini-3.7-flash-high")
+    cli.validate_model("Gemini 3.5 Flash (Medium)")
+
+    with pytest.raises(ValueError, match="unknown Antigravity model"):
+        cli.validate_model("Gemini 9 Ultra (Maximum)")

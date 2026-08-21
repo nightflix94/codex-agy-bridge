@@ -165,8 +165,23 @@ class AntigravityCli:
         }
 
     def validate_model(self, model: str) -> None:
-        if model not in self.models():
+        if model not in self._model_identifiers():
             raise ValueError(f"unknown Antigravity model: {model}")
+
+    def _model_identifiers(self) -> set[str]:
+        """Return every spelling that names an available model.
+
+        ``agy models`` prints one "<id>\t<Display Name>" line per model, and
+        callers name a model by either half. Comparing against the whole line
+        matches neither, which rejected every model that actually exists.
+        """
+        identifiers: set[str] = set()
+        for line in self.models():
+            for field in line.split("\t"):
+                candidate = field.strip()
+                if candidate:
+                    identifiers.add(candidate)
+        return identifiers
 
     def build_run_command(
         self,

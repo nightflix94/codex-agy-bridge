@@ -47,7 +47,7 @@ from codex_agy_bridge.state import (
 )
 from codex_agy_bridge.store import DiskRunStore, RunStore
 
-DEFAULT_MODEL = "Gemini 3.5 Flash (Medium)"
+DEFAULT_MODEL = "Gemini 3.7 Flash (High)"
 DEFAULT_MAX_PARALLEL = 50
 JANITOR_INTERVAL_SECONDS = 60
 DEFAULT_WAIT_TIMEOUT_SECONDS = 86_400
