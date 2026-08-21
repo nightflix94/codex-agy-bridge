@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -407,3 +408,80 @@ def test_discovery_functions_use_explicit_paths_and_exact_wrapped_prompt(tmp_pat
         started_after=0,
         brain_dir=Path(tmp_path / "missing-brain"),
     ) is None
+
+
+def _truncated_user_input(prompt: str, *, head: int, tail: int) -> str:
+    """Build the shape Antigravity writes when it elides a long prompt.
+
+    Captured from a real run: the recorded content is
+    ``<prefix>\\n<truncated N bytes>\\n<suffix>``, where N is the byte length
+    of the elided middle and the two newlines belong to the marker.
+    """
+    prefix, suffix = prompt[:head], prompt[len(prompt) - tail :]
+    missing = (
+        len(prompt.encode("utf-8"))
+        - len(prefix.encode("utf-8"))
+        - len(suffix.encode("utf-8"))
+    )
+    return f"{prefix}\n<truncated {missing} bytes>\n{suffix}"
+
+
+def _brain_with_user_input(tmp_path: Path, content: str) -> Path:
+    brain = tmp_path / "brain"
+    conversation = ConversationTranscript.at("truncated", brain_dir=brain)
+    conversation.path.parent.mkdir(parents=True)
+    _write_records(
+        conversation.path,
+        {
+            "step_index": 0,
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "content": content,
+        },
+    )
+    return brain
+
+
+def test_truncated_user_input_still_correlates_to_its_conversation(tmp_path):
+    prompt = "Task:\n" + ("detailed instruction line\n" * 200) + "Done."
+    brain = _brain_with_user_input(
+        tmp_path,
+        "<USER_REQUEST>\n"
+        + _truncated_user_input(prompt, head=400, tail=300)
+        + "\n</USER_REQUEST>",
+    )
+
+    assert (
+        conversation_for_prompt_after(prompt, started_after=0, brain_dir=brain)
+        == "truncated"
+    )
+
+
+def test_truncated_match_rejects_a_different_prompt(tmp_path):
+    prompt = "Task:\n" + ("detailed instruction line\n" * 200) + "Done."
+    brain = _brain_with_user_input(
+        tmp_path,
+        _truncated_user_input(prompt, head=400, tail=300),
+    )
+
+    assert (
+        conversation_for_prompt_after(
+            "Task:\nsomething else entirely",
+            started_after=0,
+            brain_dir=brain,
+        )
+        is None
+    )
+
+
+def test_truncated_match_rejects_an_inconsistent_byte_count(tmp_path):
+    prompt = "Task:\n" + ("detailed instruction line\n" * 200) + "Done."
+    honest = _truncated_user_input(prompt, head=400, tail=300)
+    # Same head and tail, but the marker under-reports the elided middle, so
+    # the recorded content cannot have come from this prompt.
+    dishonest = re.sub(r"<truncated \d+ bytes>", "<truncated 12 bytes>", honest)
+    brain = _brain_with_user_input(tmp_path, dishonest)
+
+    assert (
+        conversation_for_prompt_after(prompt, started_after=0, brain_dir=brain) is None
+    )

@@ -1755,3 +1755,66 @@ def test_interactive_queue_preserves_prompt_when_in_flight_state_write_fails(
         supervisor._deliver_interactive_input()
 
     assert interactive_input.peek(tmp_path) == "preserve me"
+
+
+def test_foreground_run_completes_from_terminal_marker_without_a_transcript(
+    monkeypatch,
+    tmp_path,
+):
+    """A foreground Run whose Conversation never correlated must still finish.
+
+    Antigravity elides long prompts in the transcript, so
+    conversation_for_prompt_after can fail permanently and no harvester is
+    ever built. The marker it printed is then visible only in the terminal.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "execution_surface": "foreground",
+        "human_attachable": True,
+        "tmux_session": "agy-run-1",
+    }
+    (tmp_path / "terminal.log").write_text(
+        "\n".join(
+            [
+                "Task:",
+                "write a tiny review file",
+                "",
+                "Completion marker:",
+                "DONE_MARKER",
+                "The report has been written to artifacts/report.md",
+                "DONE_MARKER",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    supervisor = RunSupervisor("run-1")
+
+    assert supervisor.harvester is None
+    assert supervisor._response() is None
+    assert supervisor._completion_response() == (
+        "\nThe report has been written to artifacts/report.md\nDONE_MARKER"
+    )
+
+
+def test_reflowed_task_echo_is_not_a_completion_marker():
+    """A TUI may reflow the packet so heading and marker share one line.
+
+    Terminal evidence is now read for foreground Runs, so an echo that keeps
+    no line structure must still be recognised as the prompt coming back.
+    """
+    echoed = "<USER_REQUEST> Task: do work Completion marker: DONE_MARKER"
+    assert _marker_is_echoed_task_prompt(echoed, echoed.find("DONE_MARKER")) is True
+
+    answered = (
+        "Task:\n\nCompletion marker:\nDONE_MARKER\n"
+        "The report was written to artifacts/report.md\nDONE_MARKER"
+    )
+    assert (
+        _marker_is_echoed_task_prompt(answered, answered.rfind("DONE_MARKER")) is False
+    )

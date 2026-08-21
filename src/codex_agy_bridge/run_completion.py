@@ -219,10 +219,13 @@ def looks_like_incomplete_response(response: str) -> bool:
 
 
 def marker_is_echoed_task_prompt(text: str, marker_at: int) -> bool:
-    """Return whether a marker occurrence belongs to the echoed task packet."""
+    """Return whether a marker occurrence belongs to the echoed task packet.
+
+    The packet is not always echoed with its line structure intact. A TUI that
+    reflows the prompt can put the "Completion marker:" heading and the marker
+    itself on one line, so this must not require a newline before the marker.
+    """
     previous_text = text[:marker_at]
-    if "\n" not in previous_text:
-        return False
     previous_lines = []
     for line in previous_text.splitlines()[-12:]:
         normalized = normalize_task_prompt_line(line)
@@ -230,7 +233,7 @@ def marker_is_echoed_task_prompt(text: str, marker_at: int) -> bool:
             previous_lines.append(normalized)
     if not previous_lines:
         return False
-    if previous_lines[-1] == "Completion marker:":
+    if previous_lines[-1].endswith("Completion marker:"):
         return True
     try:
         heading_index = len(previous_lines) - 1 - previous_lines[::-1].index(

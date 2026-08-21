@@ -34,6 +34,9 @@ def _validate_conversation_id(conversation_id: str) -> str:
     return conversation_id
 
 
+TRUNCATED_PROMPT_RE = re.compile(r"\n<truncated (?P<bytes>\d+) bytes>\n")
+
+
 def transcript_path(conversation_id: str, *, brain_dir: Path) -> Path:
     """Return the Antigravity JSONL path for one validated Conversation."""
     return (
@@ -368,11 +371,40 @@ def conversation_for_prompt_after(
 
 
 def _user_content_matches_prompt(content: str, prompt: str) -> bool:
-    if content == prompt:
+    if _content_is_prompt(content, prompt):
         return True
     match = re.match(
         r"\s*<USER_REQUEST>\n?(?P<prompt>.*?)\n?</USER_REQUEST>(?:\s|$)",
         content,
         re.S,
     )
-    return bool(match and match.group("prompt") == prompt)
+    return bool(match and _content_is_prompt(match.group("prompt"), prompt))
+
+
+def _content_is_prompt(content: str, prompt: str) -> bool:
+    """Return whether recorded content is this prompt, elided or not.
+
+    Antigravity rewrites a long prompt before recording it, replacing the
+    middle with ``<prefix>\n<truncated N bytes>\n<suffix>``. Exact equality
+    therefore never holds for a long prompt, and a Run whose Conversation is
+    identified by that comparison would never correlate.
+
+    Requiring the prefix and suffix to bracket this exact prompt, and the
+    declared byte count to account for precisely the remainder, keeps the
+    match specific enough that it cannot pair a Run with a different
+    Conversation.
+    """
+    if content == prompt:
+        return True
+    match = TRUNCATED_PROMPT_RE.search(content)
+    if match is None:
+        return False
+    head, tail = content[: match.start()], content[match.end() :]
+    if not (prompt.startswith(head) and prompt.endswith(tail)):
+        return False
+    elided = (
+        len(prompt.encode("utf-8"))
+        - len(head.encode("utf-8"))
+        - len(tail.encode("utf-8"))
+    )
+    return elided == int(match.group("bytes"))

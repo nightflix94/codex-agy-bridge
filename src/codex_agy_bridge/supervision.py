@@ -213,14 +213,7 @@ class RunSupervisor:
                 self._finish(status="failed", error=stall_error)
                 return 1
             self._deliver_interactive_input()
-            response = self._response()
-            terminal_response = (
-                self._terminal_completion_response()
-                if self.state.get("execution_surface") != "foreground"
-                else None
-            )
-            if terminal_response is not None:
-                response = response or terminal_response
+            response = self._completion_response()
             if self._completion_is_stable(response):
                 self._finish(
                     status="completed",
@@ -426,6 +419,17 @@ class RunSupervisor:
 
     def _response(self) -> str | None:
         return self.harvester.latest_response if self.harvester else None
+
+    def _completion_response(self) -> str | None:
+        """Return the best completion evidence, preferring the transcript.
+
+        Terminal evidence is read on every surface, not only detached ones. A
+        foreground Run whose Conversation was never correlated has no
+        transcript to harvest, and the completion marker it printed is then
+        visible only in the terminal. Gating this on the surface left every
+        production Run - all of which are foreground - unable to finish.
+        """
+        return self._response() or self._terminal_completion_response()
 
     def _terminal_completion_response(self) -> str | None:
         return self.completion.terminal_response(self.session)
