@@ -22,6 +22,15 @@ INCOMPLETE_RESPONSE_PHRASES = (
     "when it finishes",
 )
 TERMINAL_COMPLETION_MIN_RESPONSE_CHARS = 8
+# Chrome the interactive TUI draws while work is still running. Under
+# --prompt-interactive the packet stays on screen, so the marker is rendered
+# many times over and a slice between occurrences can capture the pane
+# mid-work. None of these can appear in a finished answer.
+TERMINAL_UI_ARTIFACTS = (
+    "(ctrl+o to expand)",
+    "esc to interrupt",
+    "\u25b8 thought for",
+)
 
 
 @dataclass(frozen=True)
@@ -274,7 +283,15 @@ def normalize_task_prompt_line(line: str) -> str:
 
 def terminal_response_is_meaningful(response: str, marker: str) -> bool:
     cleaned = core.clean_response(response, marker) or ""
-    return len(cleaned.strip()) >= TERMINAL_COMPLETION_MIN_RESPONSE_CHARS
+    if len(cleaned.strip()) < TERMINAL_COMPLETION_MIN_RESPONSE_CHARS:
+        return False
+    return not shows_terminal_ui_chrome(cleaned)
+
+
+def shows_terminal_ui_chrome(response: str) -> bool:
+    """Return whether text is the TUI drawing itself rather than an answer."""
+    lowered = response.casefold()
+    return any(artifact in lowered for artifact in TERMINAL_UI_ARTIFACTS)
 
 
 def read_tail(path: Path, max_bytes: int) -> str:

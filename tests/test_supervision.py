@@ -1971,3 +1971,70 @@ def test_flattened_task_echo_is_not_a_completion_marker():
         "edits are complete: DONE_MARKER"
     )
     assert _marker_is_echoed_task_prompt(echoed, echoed.find("DONE_MARKER")) is True
+
+
+def test_terminal_ui_chrome_is_not_a_final_answer(monkeypatch, tmp_path):
+    """A pane mid-work is not a result, even with a marker on screen.
+
+    Under --prompt-interactive the packet stays rendered while the agent
+    works, so the marker appears in the pane many times over. Slicing to one
+    of those occurrences can capture narration and a collapsed tool call,
+    which is what the TUI shows while work is still running.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "execution_surface": "foreground",
+        "tmux_session": "agy-run-1",
+    }
+    (tmp_path / "terminal.log").write_text(
+        "\n".join(
+            [
+                "Completion marker:",
+                "DONE_MARKER",
+                "",
+                "  I will locate wireguard.py to perform the health probe.",
+                "",
+                "● Find(File search) (ctrl+o to expand)",
+                "▸ Thought for 2s",
+                "DONE_MARKER",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+
+    assert RunSupervisor("run-1")._terminal_completion_response() is None
+
+
+def test_a_real_answer_in_the_pane_still_completes(monkeypatch, tmp_path):
+    """The guard must not reject a genuine finished answer."""
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "execution_surface": "foreground",
+        "tmux_session": "agy-run-1",
+    }
+    (tmp_path / "terminal.log").write_text(
+        "\n".join(
+            [
+                "Completion marker:",
+                "DONE_MARKER",
+                "",
+                "The report has been written to artifacts/report.md",
+                "DONE_MARKER",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+
+    assert RunSupervisor("run-1")._terminal_completion_response() is not None
