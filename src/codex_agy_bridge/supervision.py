@@ -89,6 +89,7 @@ class RunSupervisor:
         # records land above this Run's baseline and would otherwise arm
         # completion here. Evidence only counts after this Run's own prompt
         # appears. A fresh Conversation cannot be shared, so it starts open.
+        self.foreign_input_seen = False
         self.own_input_step_index: int | None = (
             None if self.state.get("requested_conversation_id") else -1
         )
@@ -359,21 +360,35 @@ class RunSupervisor:
                     and record["step_index"] > latest_step
                 ):
                     latest_step = record["step_index"]
-                if (
-                    record.get("type") == "USER_INPUT"
-                    and isinstance(record.get("step_index"), int)
-                    and core._user_content_matches_prompt(
+                if record.get("type") == "USER_INPUT" and isinstance(
+                    record.get("step_index"), int
+                ):
+                    if core._user_content_matches_prompt(
                         str(record.get("content") or ""),
                         str(self.state["prompt"]),
-                    )
-                ):
-                    self.own_input_step_index = record["step_index"]
+                    ):
+                        self.own_input_step_index = record["step_index"]
+                    elif self.own_input_step_index is not None:
+                        # Another Run is writing turns here. Nothing in the
+                        # transcript ties a response to the input that
+                        # prompted it, so from here on ordering cannot show
+                        # whose answer is whose. Start-time exclusion should
+                        # prevent this; refuse to guess if it ever occurs.
+                        self.foreign_input_seen = True
+                        self.done_response_step_index = None
+                        self.done_response_seen_at = None
+                        self._log(
+                            "conversation_contended",
+                            conversation=self.conversation_id,
+                            foreign_step=record["step_index"],
+                        )
                 if (
                     record.get("type") == "PLANNER_RESPONSE"
                     and record.get("status") == "DONE"
                     and isinstance(record.get("step_index"), int)
                     and self.own_input_step_index is not None
                     and record["step_index"] > self.own_input_step_index
+                    and not self.foreign_input_seen
                 ):
                     self.latest_response_step_index = record["step_index"]
                     if record.get("tool_calls"):

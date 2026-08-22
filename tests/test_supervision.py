@@ -2206,3 +2206,68 @@ def test_continuation_ignores_a_concurrent_runs_response(monkeypatch, tmp_path):
 
     assert supervisor.done_response_step_index is None
     assert supervisor._completion_is_stable("the other run's answer") is False
+
+
+def test_a_foreign_input_after_our_own_disarms_transcript_completion(
+    monkeypatch, tmp_path
+):
+    """Ordering cannot attribute a response once another writer appears.
+
+    A_input, B_input, B_response is a valid interleaving: the response sits
+    above this Run's own input and would otherwise be accepted as its
+    answer. Seeing an input that is not ours is proof another Run is
+    writing here, so transcript evidence can no longer be trusted.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "my own prompt",
+        "requested_conversation_id": "shared-conversation",
+    }
+    records = [
+        {
+            "step_index": 10,
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "content": "my own prompt",
+        },
+        {
+            "step_index": 11,
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "content": "the other run's prompt",
+        },
+        {
+            "step_index": 12,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "content": "the other run's answer",
+        },
+    ]
+
+    class FakeHarvester:
+        latest_response = "the other run's answer"
+
+        def __init__(self, _conversation_id, _path):
+            pass
+
+        def fast_forward(self):
+            return 9
+
+        def poll(self):
+            return records
+
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.TranscriptHarvester", FakeHarvester
+    )
+
+    supervisor = RunSupervisor("run-1")
+    supervisor._observe_conversation()
+
+    assert supervisor.done_response_step_index is None
+    assert supervisor._completion_is_stable("the other run's answer") is False

@@ -17,7 +17,10 @@ from codex_agy_bridge import (
     session_events,
 )
 from codex_agy_bridge._orchestrator import RunnerOrchestrator
-from codex_agy_bridge.exceptions import AuthenticationRequiredError
+from codex_agy_bridge.exceptions import (
+    AuthenticationRequiredError,
+    ConcurrencyLimitExceeded,
+)
 from codex_agy_bridge.execution import MockSession
 from codex_agy_bridge.process import ProcessManager
 from codex_agy_bridge.store import MemoryRunStore
@@ -2571,3 +2574,65 @@ def test_goal_rejects_unknown_model_before_persistence(tmp_path):
         )
 
     assert store.goals == {}
+
+
+def test_second_continuation_of_a_live_conversation_is_refused(monkeypatch, tmp_path):
+    """A Conversation is one ordered turn sequence, so one live Run owns it.
+
+    Two Runs appending turns to one Conversation interleave in the shared
+    transcript, and no field ties a response to the input that prompted it,
+    so ordering cannot attribute one afterwards. Prevent it at the start.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state_root = isolate_state_root(monkeypatch, tmp_path)
+    store = MemoryRunStore()
+    # Already running, and it holds the Conversation by request.
+    store.runs["run-live"] = {
+        "run_id": "run-live",
+        "status": "running",
+        "workspace": str(workspace),
+        "prompt": "the first continuation",
+        "requested_conversation_id": "shared-conversation",
+        "request_key": "some-other-key",
+    }
+    orch = RunnerOrchestrator(state_root=state_root, store=store)
+
+    with pytest.raises(ConcurrencyLimitExceeded, match="shared-conversation"):
+        orch.create_run(
+            prompt="a different continuation",
+            workspace=str(workspace),
+            timeout_seconds=900,
+            conversation_id="shared-conversation",
+        )
+
+
+def test_continuation_is_refused_for_a_resolved_conversation(monkeypatch, tmp_path):
+    """A fresh Run owns the Conversation it resolved, not just a requested one.
+
+    A Run that started fresh and correlated to a Conversation is still
+    writing turns to it, so continuing that Conversation while it runs is
+    the same hazard even though nothing was requested.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state_root = isolate_state_root(monkeypatch, tmp_path)
+    store = MemoryRunStore()
+    store.runs["run-live"] = {
+        "run_id": "run-live",
+        "status": "running",
+        "workspace": str(workspace),
+        "prompt": "a fresh task",
+        "requested_conversation_id": None,
+        "conversation_id": "resolved-conversation",
+        "request_key": "some-other-key",
+    }
+    orch = RunnerOrchestrator(state_root=state_root, store=store)
+
+    with pytest.raises(ConcurrencyLimitExceeded, match="resolved-conversation"):
+        orch.create_run(
+            prompt="continue that work",
+            workspace=str(workspace),
+            timeout_seconds=900,
+            conversation_id="resolved-conversation",
+        )

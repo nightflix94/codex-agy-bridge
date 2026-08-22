@@ -505,6 +505,32 @@ class RunnerOrchestrator:
             )
             if duplicate is not None:
                 return duplicate
+            # A Conversation is one ordered sequence of turns. Two Runs
+            # appending to it interleave in the shared transcript, and no
+            # field ties a response to the input that prompted it, so
+            # ordering cannot attribute one afterwards. A Run owns the
+            # Conversation it requested and the one it resolved alike: a
+            # fresh Run that correlated to a Conversation is still writing
+            # turns to it.
+            if conversation_id:
+                holder = next(
+                    (
+                        state
+                        for state in running
+                        if conversation_id
+                        in {
+                            state.get("requested_conversation_id"),
+                            state.get("conversation_id"),
+                        }
+                    ),
+                    None,
+                )
+                if holder is not None:
+                    raise ConcurrencyLimitExceeded(
+                        f"Conversation {conversation_id} is already being "
+                        f"continued by run {holder['run_id']}. Wait for it to "
+                        "finish, or start a Run without a conversation_id."
+                    )
             global_max_parallel = _global_max_parallel()
             if len(running) >= global_max_parallel:
                 ids = ", ".join(item["run_id"] for item in running)
