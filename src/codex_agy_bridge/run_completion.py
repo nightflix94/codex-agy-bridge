@@ -177,9 +177,12 @@ class CompletionMonitor:
 
     def _terminal_candidates(self, session: str | None) -> list[str]:
         candidates: list[str] = []
+        # terminal-progress.log is deliberately absent: the bridge writes it
+        # itself from transcript steps, echoed task packet included, so it can
+        # only repeat what the transcript already holds. Treating it as
+        # independent evidence lets a Run complete on its own prompt.
         for name in (
             "terminal.log",
-            "terminal-progress.log",
             "agy.stdout.log",
             "agy.stderr.log",
         ):
@@ -235,6 +238,10 @@ def marker_is_echoed_task_prompt(text: str, marker_at: int) -> bool:
         return False
     if previous_lines[-1].endswith("Completion marker:"):
         return True
+    if _mentions_marker_instructions(previous_lines[-1]):
+        # A log that collapses newlines leaves no heading line to find, so the
+        # instructions and the marker share one line.
+        return True
     try:
         heading_index = len(previous_lines) - 1 - previous_lines[::-1].index(
             "Completion marker:"
@@ -242,12 +249,22 @@ def marker_is_echoed_task_prompt(text: str, marker_at: int) -> bool:
     except ValueError:
         return False
     instruction_lines = previous_lines[heading_index + 1 :]
-    instruction_text = " ".join(instruction_lines).casefold()
-    return (
-        "strongly suggested" in instruction_text
-        or "last line only after" in instruction_text
-        or "full and final response" in instruction_text
-    )
+    return _mentions_marker_instructions(" ".join(instruction_lines))
+
+
+MARKER_INSTRUCTION_PHRASES = (
+    "strongly suggested",
+    "last line only after",
+    "full and final response",
+    "print this marker",
+    "completion marker:",
+)
+
+
+def _mentions_marker_instructions(text: str) -> bool:
+    """Return whether text carries the packet's own marker instructions."""
+    lowered = " ".join(text.casefold().split())
+    return any(phrase in lowered for phrase in MARKER_INSTRUCTION_PHRASES)
 
 
 def normalize_task_prompt_line(line: str) -> str:

@@ -762,7 +762,8 @@ def test_foreground_supervisor_never_completes_from_terminal_task_echo(
         "execution_surface": "foreground",
     }
     active = [True, False]
-    (tmp_path / "terminal-progress.log").write_text(
+    # Real terminal evidence: the bridge's own progress log is not read.
+    (tmp_path / "terminal.log").write_text(
         "<USER_REQUEST> Task: do work Completion marker: DONE_MARKER",
         encoding="utf-8",
     )
@@ -1926,3 +1927,47 @@ def test_failed_terminal_attach_leaves_a_foreground_run_detached(
     assert len(events) == 1
     assert events[0]["severity"] == "warning"
     assert events[0]["observed"]["surface"] == "detached"
+
+
+def test_bridge_progress_log_is_not_completion_evidence(monkeypatch, tmp_path):
+    """terminal-progress.log is written by the bridge, not by agy.
+
+    append_terminal_progress() renders transcript steps back to disk, echoed
+    task packet included. Reading it as terminal evidence lets a Run complete
+    on the bridge's own rendering of the prompt it just sent.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "execution_surface": "foreground",
+        "tmux_session": "agy-run-1",
+    }
+    # Not an echo at all - a plausible finished answer. It still must not
+    # complete the Run: whatever the transcript holds is read from the
+    # transcript, so this file can only ever repeat it.
+    (tmp_path / "terminal-progress.log").write_text(
+        "[06:43:16] step 4 PLANNER_RESPONSE DONE\n"
+        "The report has been written to artifacts/report.md\nDONE_MARKER",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+
+    assert RunSupervisor("run-1")._terminal_completion_response() is None
+
+
+def test_flattened_task_echo_is_not_a_completion_marker():
+    """The packet can reach a log with every newline collapsed.
+
+    Captured from a live run: the marker instructions and the marker itself
+    land on one line, so no "Completion marker:" heading line exists to find.
+    """
+    echoed = (
+        "full and final response the calling harness should show the user, then "
+        "print this marker as the last line only after all requested files and "
+        "edits are complete: DONE_MARKER"
+    )
+    assert _marker_is_echoed_task_prompt(echoed, echoed.find("DONE_MARKER")) is True
