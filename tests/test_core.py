@@ -535,3 +535,50 @@ def test_claim_conversation_refuses_an_id_held_by_another_live_run(tmp_path):
     assert core.claim_conversation("run-loser", "conv-a", state_root=tmp_path) is False
     assert core.load_state("run-loser", tmp_path).get("conversation_id") is None
     assert core.load_state("run-holder", tmp_path)["conversation_id"] == "conv-a"
+
+
+def test_claim_conversation_refuses_to_decide_on_unreadable_holder_state(tmp_path):
+    """An unreadable holder must not look like an absent one.
+
+    active_runs() drops a Run whose state will not load and deletes its
+    marker, which is right for housekeeping and wrong for ownership: the
+    claimant would see no holder and take a Conversation that is in use,
+    exactly when storage is degraded.
+    """
+    core.ensure_private_directory(tmp_path)
+    (tmp_path / "active").mkdir(exist_ok=True)
+    core.atomic_write_json(
+        core.state_path("run-loser", state_root=tmp_path),
+        {"run_id": "run-loser", "status": "running"},
+    )
+    (tmp_path / "active" / "run-loser").write_text("", encoding="utf-8")
+    # A live holder whose state is corrupt on disk.
+    holder_state = core.state_path("run-holder", state_root=tmp_path)
+    holder_state.parent.mkdir(parents=True, exist_ok=True)
+    holder_state.write_text("{not json", encoding="utf-8")
+    (tmp_path / "active" / "run-holder").write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        core.claim_conversation("run-loser", "conv-a", state_root=tmp_path)
+
+    assert core.load_state("run-loser", tmp_path).get("conversation_id") is None
+    # The unreadable holder's marker must survive an ownership decision.
+    assert (tmp_path / "active" / "run-holder").exists()
+
+
+def test_claim_conversation_ignores_a_stale_active_marker(tmp_path):
+    """A marker with no state behind it cannot be holding anything.
+
+    Refusing to decide on those would let one leftover file block every
+    future claim.
+    """
+    core.ensure_private_directory(tmp_path)
+    (tmp_path / "active").mkdir(exist_ok=True)
+    core.atomic_write_json(
+        core.state_path("run-1", state_root=tmp_path),
+        {"run_id": "run-1", "status": "running"},
+    )
+    (tmp_path / "active" / "run-1").write_text("", encoding="utf-8")
+    (tmp_path / "active" / "run-vanished").write_text("", encoding="utf-8")
+
+    assert core.claim_conversation("run-1", "conv-a", state_root=tmp_path) is True

@@ -247,6 +247,34 @@ def process_alive(pid: int | None) -> bool:
     return True
 
 
+def _holders_for_ownership(state_root: Path) -> list[RunState]:
+    """Enumerate active Runs without discarding any that cannot be read.
+
+    active_runs() drops a Run whose state fails to load and deletes its
+    marker. That is right for housekeeping and wrong for deciding
+    ownership: a holder that is momentarily unreadable would look absent,
+    and the claimant would take a Conversation that is in use, precisely
+    when storage is degraded.
+
+    A marker with no state behind it is different. It cannot be holding
+    anything, and refusing to decide on those would let one leftover file
+    block every future claim, so it is skipped. Anything else propagates
+    and leaves the claim undecided.
+    """
+    active_dir = state_root / "active"
+    if not active_dir.exists():
+        return []
+    holders: list[RunState] = []
+    for path in sorted(active_dir.iterdir()):
+        if path.name.startswith(".") or not path.is_file():
+            continue
+        try:
+            holders.append(load_state(path.name, state_root))
+        except FileNotFoundError:
+            continue
+    return holders
+
+
 def claim_conversation(
     run_id: str,
     conversation_id: str,
@@ -268,7 +296,7 @@ def claim_conversation(
     actual_state_root = state_root or STATE_ROOT
     ensure_private_directory(actual_state_root)
     with FileLock(str(actual_state_root / "start.lock"), timeout=10):
-        for state in active_runs(actual_state_root):
+        for state in _holders_for_ownership(actual_state_root):
             if state.get("run_id") == run_id:
                 continue
             if conversation_id in {

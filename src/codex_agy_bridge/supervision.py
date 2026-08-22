@@ -331,8 +331,12 @@ class RunSupervisor:
                     started_after=self.launched_at,
                 )
                 source = "prompt_scan"
-            if self.conversation_id and not self._claim_conversation(source):
-                return
+            if self.conversation_id:
+                # A claim that is refused or undecided clears the id, so the
+                # branch below takes the same backoff as a failed
+                # correlation. Returning here instead would retry the claim
+                # on every pass, and each attempt can wait on start.lock.
+                self._claim_conversation(source)
             if self.conversation_id:
                 self.harvester = TranscriptHarvester(
                     str(self.conversation_id),

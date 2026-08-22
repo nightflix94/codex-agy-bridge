@@ -354,10 +354,18 @@ real cost:
 None of these is a small change, and the first is destructive in a way the
 defect is not. It is recorded here rather than settled hastily.
 
-Exposure is narrow. The window is the microseconds between correlation and the
-claim, and a caller must name a Conversation id it has no supported way to learn
-that early — run state carries the id only once the claim has written it. The
-window is now reported: a refused claim writes `conversation_claim_conflict` to
-`bridge.log` naming the holder, so this stops being a silent race and starts
-being an observable one. Decide the process policy once there is evidence it
-fires.
+Exposure is narrower than the general case but not as narrow as "the moment of
+correlation". Correlation is attempted on a poll, not continuously: the probe
+runs at most every 0.5 seconds and backs off to 8 seconds after a failure, and a
+claim can additionally wait on `start.lock`. The window in which a Conversation
+exists but is not yet claimed is therefore bounded by the probe interval, not by
+the claim itself.
+
+What does limit it is that a caller must name a Conversation id it has no
+supported way to learn that early — run state carries the id only once the claim
+has written it, so the id would have to come from `agy.log` or the brain
+directory out of band.
+
+The window is now reported rather than silent: a refused claim writes
+`conversation_claim_conflict` to `bridge.log` naming the holder. Decide the
+process policy once there is evidence it fires.

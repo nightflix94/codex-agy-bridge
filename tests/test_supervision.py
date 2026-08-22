@@ -2438,3 +2438,54 @@ def test_an_undecidable_claim_is_retried_unlike_a_refusal(monkeypatch, tmp_path)
 
     supervisor._observe_conversation(force=True)
     assert supervisor.conversation_id == "conv-a"
+
+
+def test_an_undecided_claim_backs_off_before_retrying(monkeypatch, tmp_path):
+    """A failing claim must not be retried every loop iteration.
+
+    start.lock waits up to ten seconds, so retrying on every 0.5s pass
+    would keep supervision blocked and delay cancellation, completion, and
+    the timeout check.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    attempts = []
+    clock = FakeClock()
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "conv-a")
+
+    def unavailable(*_args, **_kwargs):
+        attempts.append(clock.value)
+        raise TimeoutError("start.lock is held")
+
+    monkeypatch.setattr(runner, "claim_conversation", unavailable, raising=False)
+
+    supervisor = RunSupervisor("run-1")
+    supervisor._observe_conversation()
+    assert attempts == [0.0]
+
+    # Several supervision passes inside the first backoff window: the claim
+    # is not retried, so no pass can block on start.lock.
+    clock.advance(0.5)
+    supervisor._observe_conversation()
+    assert attempts == [0.0]
+
+    # Past the deadline it retries once, and the window widens.
+    clock.advance(0.5)
+    supervisor._observe_conversation()
+    assert attempts == [0.0, 1.0]
+
+    clock.advance(1.5)
+    supervisor._observe_conversation()
+    assert attempts == [0.0, 1.0]
+
+    clock.advance(0.5)
+    supervisor._observe_conversation()
+    assert attempts == [0.0, 1.0, 3.0]
