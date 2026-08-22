@@ -2272,52 +2272,6 @@ def test_a_later_input_does_not_disable_completion(monkeypatch, tmp_path):
     assert supervisor.done_response_step_index == 12
 
 
-def test_a_conflicting_conversation_claim_is_recorded(monkeypatch, tmp_path, capsys):
-    """A fresh Run persists its resolved id outside start.lock.
-
-    Start-time ownership cannot see an id that has not been written yet, so
-    a continuation reserving it in that window leaves two live writers.
-    Detection here is read-only and deliberately does not change the Run:
-    it makes an otherwise invisible race visible in bridge.log.
-    """
-    state = {
-        "run_id": "run-1",
-        "workspace": str(tmp_path),
-        "timeout_seconds": 10,
-        "completion_marker": "DONE_MARKER",
-        "prompt": "do work",
-    }
-    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
-    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
-    monkeypatch.setattr(runner, "update_state", lambda _run_id, **changes: changes)
-    monkeypatch.setattr(
-        runner, "conversation_from_log", lambda _path: "contested-conversation"
-    )
-    monkeypatch.setattr(
-        "codex_agy_bridge.supervision.TranscriptHarvester",
-        lambda _conversation_id, _path: type(
-            "H", (), {"fast_forward": lambda self: -1, "poll": lambda self: [],
-                      "latest_response": None}
-        )(),
-    )
-    monkeypatch.setattr(
-        runner,
-        "active_runs",
-        lambda: [
-            {"run_id": "run-1", "conversation_id": None},
-            {"run_id": "run-other", "conversation_id": "contested-conversation"},
-        ],
-        raising=False,
-    )
-
-    RunSupervisor("run-1")._observe_conversation()
-
-    out = capsys.readouterr().out
-    assert "event=conversation_claim_conflict" in out
-    assert "holder=run-other" in out
-    assert "conversation=contested-conversation" in out
-
-
 def test_an_uncontested_claim_is_not_reported(monkeypatch, tmp_path, capsys):
     state = {
         "run_id": "run-1",
@@ -2330,6 +2284,9 @@ def test_an_uncontested_claim_is_not_reported(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
     monkeypatch.setattr(runner, "update_state", lambda _run_id, **changes: changes)
     monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "mine")
+    monkeypatch.setattr(
+        runner, "claim_conversation", lambda *_a, **_k: True, raising=False
+    )
     monkeypatch.setattr(
         "codex_agy_bridge.supervision.TranscriptHarvester",
         lambda _conversation_id, _path: type(
@@ -2347,3 +2304,52 @@ def test_an_uncontested_claim_is_not_reported(monkeypatch, tmp_path, capsys):
     RunSupervisor("run-1")._observe_conversation()
 
     assert "conversation_claim_conflict" not in capsys.readouterr().out
+
+
+def test_a_lost_conversation_claim_leaves_the_run_uncorrelated(
+    monkeypatch, tmp_path, capsys
+):
+    """Losing the claim must not make this Run a second reader.
+
+    Adopting a Conversation another live Run holds is what lets one Run
+    publish another's answer. The loser keeps working and completes from
+    its own terminal.log, which belongs to its own tmux session, so it is
+    trustworthy even while the Conversation is contended.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    built = []
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "contested")
+    monkeypatch.setattr(
+        runner, "claim_conversation", lambda *_args, **_kwargs: False, raising=False
+    )
+    monkeypatch.setattr(
+        runner,
+        "active_runs",
+        lambda: [{"run_id": "run-other", "conversation_id": "contested"}],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.TranscriptHarvester",
+        lambda cid, path: built.append(cid),
+    )
+
+    supervisor = RunSupervisor("run-1")
+    supervisor._observe_conversation()
+    supervisor._observe_conversation()
+
+    assert supervisor.conversation_id is None
+    assert supervisor.harvester is None
+    assert built == []
+    out = capsys.readouterr().out
+    # Reported once, and not retried into a loop.
+    assert out.count("event=conversation_claim_conflict") == 1
+    assert "holder=run-other" in out
+    assert "conversation=contested" in out

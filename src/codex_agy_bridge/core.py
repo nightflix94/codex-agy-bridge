@@ -247,6 +247,43 @@ def process_alive(pid: int | None) -> bool:
     return True
 
 
+def claim_conversation(
+    run_id: str,
+    conversation_id: str,
+    state_root: Path | None = None,
+) -> bool:
+    """Record a resolved Conversation only if no other live Run holds it.
+
+    Correlating and persisting used to be two steps, so a continuation
+    reserving the same id in between left two live writers on one
+    Conversation. The transcript cannot say whose response is whose once
+    that happens, so the check and the write share start.lock - the same
+    lock create_run holds while refusing a held Conversation.
+
+    Returns whether the claim succeeded. A caller that loses must not read
+    that Conversation: its terminal evidence is per-Run and stays usable.
+    """
+    from filelock import FileLock
+
+    actual_state_root = state_root or STATE_ROOT
+    ensure_private_directory(actual_state_root)
+    with FileLock(str(actual_state_root / "start.lock"), timeout=10):
+        for state in active_runs(actual_state_root):
+            if state.get("run_id") == run_id:
+                continue
+            if conversation_id in {
+                state.get("requested_conversation_id"),
+                state.get("conversation_id"),
+            }:
+                return False
+        update_state(
+            run_id,
+            actual_state_root,
+            conversation_id=conversation_id,
+        )
+        return True
+
+
 def active_runs(state_root: Path | None = None) -> list[RunState]:
     actual_state_root = state_root or STATE_ROOT
     active_dir = actual_state_root / "active"

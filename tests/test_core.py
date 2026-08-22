@@ -501,3 +501,37 @@ def test_state_paths_reject_unsafe_identifiers(tmp_path, identifier):
         core.goal_dir(identifier, tmp_path)
     with pytest.raises(ValueError, match="conversation_id"):
         core.transcript_path(identifier)
+
+
+def test_claim_conversation_persists_an_uncontested_id(tmp_path):
+    """Correlating and recording the id must be one atomic step."""
+    core.ensure_private_directory(tmp_path)
+    core.atomic_write_json(
+        core.state_path("run-1", state_root=tmp_path),
+        {"run_id": "run-1", "status": "running"},
+    )
+    (tmp_path / "active").mkdir(exist_ok=True)
+    (tmp_path / "active" / "run-1").write_text("", encoding="utf-8")
+
+    assert core.claim_conversation("run-1", "conv-a", state_root=tmp_path) is True
+    assert core.load_state("run-1", tmp_path)["conversation_id"] == "conv-a"
+
+
+def test_claim_conversation_refuses_an_id_held_by_another_live_run(tmp_path):
+    """The holder keeps it, and the loser records nothing.
+
+    Writing the id anyway would make the loser a second reader of a
+    transcript it cannot attribute responses in.
+    """
+    core.ensure_private_directory(tmp_path)
+    (tmp_path / "active").mkdir(exist_ok=True)
+    for run_id, conversation in (("run-holder", "conv-a"), ("run-loser", None)):
+        core.atomic_write_json(
+            core.state_path(run_id, state_root=tmp_path),
+            {"run_id": run_id, "status": "running", "conversation_id": conversation},
+        )
+        (tmp_path / "active" / run_id).write_text("", encoding="utf-8")
+
+    assert core.claim_conversation("run-loser", "conv-a", state_root=tmp_path) is False
+    assert core.load_state("run-loser", tmp_path).get("conversation_id") is None
+    assert core.load_state("run-holder", tmp_path)["conversation_id"] == "conv-a"

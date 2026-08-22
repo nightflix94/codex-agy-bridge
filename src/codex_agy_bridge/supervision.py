@@ -89,6 +89,7 @@ class RunSupervisor:
         # records land above this Run's baseline and would otherwise arm
         # completion here. Evidence only counts after this Run's own prompt
         # appears. A fresh Conversation cannot be shared, so it starts open.
+        self.conversation_claim_declined = False
         self.own_input_step_index: int | None = (
             None if self.state.get("requested_conversation_id") else -1
         )
@@ -311,6 +312,8 @@ class RunSupervisor:
 
     def _observe_conversation(self, *, force: bool = False) -> None:
         if not self.conversation_id:
+            if self.conversation_claim_declined:
+                return
             now = time.monotonic()
             if not force and now < self.next_conversation_probe_at:
                 return
@@ -328,23 +331,15 @@ class RunSupervisor:
                     started_after=self.launched_at,
                 )
                 source = "prompt_scan"
-            if self.conversation_id:
-                self._log(
-                    "conversation_resolved",
-                    conversation=self.conversation_id,
-                    source=source,
-                )
-                self._report_claim_conflict()
+            if self.conversation_id and not self._claim_conversation(source):
+                return
             if self.conversation_id:
                 self.harvester = TranscriptHarvester(
                     str(self.conversation_id),
                     runtime.transcript_path(str(self.conversation_id)),
                 )
+                # _claim_conversation persisted the id under start.lock.
                 self.conversation_probe_delay = 1.0
-                runtime.update_state(
-                    self.run_id,
-                    conversation_id=self.conversation_id,
-                )
             else:
                 self.next_conversation_probe_at = now + self.conversation_probe_delay
                 self.conversation_probe_delay = min(
@@ -441,7 +436,33 @@ class RunSupervisor:
             },
         )
 
-    def _report_claim_conflict(self) -> None:
+    def _claim_conversation(self, source: str) -> bool:
+        """Adopt the resolved Conversation, unless another live Run holds it.
+
+        Two Runs reading one Conversation cannot tell whose response is
+        whose, so a Run that loses the claim does not adopt it at all. It
+        keeps working and completes from its own terminal.log, which belongs
+        to its own tmux session and stays attributable while the
+        Conversation is contended. The attempt is not repeated: the holder
+        is not going to release it mid-Run, and retrying would only relog.
+        """
+        conversation_id = str(self.conversation_id)
+        claimed = True
+        with suppress(Exception):
+            claimed = runtime.claim_conversation(self.run_id, conversation_id)
+        if not claimed:
+            self.conversation_id = None
+            self.conversation_claim_declined = True
+            self._report_claim_conflict(conversation_id)
+            return False
+        self._log(
+            "conversation_resolved",
+            conversation=conversation_id,
+            source=source,
+        )
+        return True
+
+    def _report_claim_conflict(self, conversation_id: str) -> None:
         """Record another live Run already holding the Conversation we resolved.
 
         create_run refuses a Conversation held by a live Run, but a fresh Run
@@ -459,7 +480,7 @@ class RunSupervisor:
                     state
                     for state in runtime.active_runs()
                     if state.get("run_id") != self.run_id
-                    and self.conversation_id
+                    and conversation_id
                     in {
                         state.get("requested_conversation_id"),
                         state.get("conversation_id"),
@@ -470,7 +491,7 @@ class RunSupervisor:
             if holder is not None:
                 self._log(
                     "conversation_claim_conflict",
-                    conversation=self.conversation_id,
+                    conversation=conversation_id,
                     holder=holder.get("run_id"),
                     detail=(
                         "another live Run holds this Conversation; "
