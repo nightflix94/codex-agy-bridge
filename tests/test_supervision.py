@@ -2353,3 +2353,88 @@ def test_a_lost_conversation_claim_leaves_the_run_uncorrelated(
     assert out.count("event=conversation_claim_conflict") == 1
     assert "holder=run-other" in out
     assert "conversation=contested" in out
+
+
+def test_an_undecidable_claim_does_not_adopt_the_conversation(
+    monkeypatch, tmp_path, capsys
+):
+    """A claim that could not be decided is not a claim.
+
+    Treating a lock timeout or filesystem error as success would restore
+    the duplicate-reader race exactly when storage is degraded or
+    contended, which is when it is most likely to matter.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    built = []
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "conv-a")
+
+    def unavailable(*_args, **_kwargs):
+        raise TimeoutError("start.lock is held")
+
+    monkeypatch.setattr(
+        runner, "claim_conversation", unavailable, raising=False
+    )
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.TranscriptHarvester",
+        lambda cid, path: built.append(cid),
+    )
+
+    supervisor = RunSupervisor("run-1")
+    supervisor._observe_conversation()
+
+    assert supervisor.conversation_id is None
+    assert supervisor.harvester is None
+    assert built == []
+    out = capsys.readouterr().out
+    assert "event=conversation_claim_failed" in out
+    assert "event=conversation_resolved" not in out
+
+
+def test_an_undecidable_claim_is_retried_unlike_a_refusal(monkeypatch, tmp_path):
+    """A refusal is final; an error is not.
+
+    A holder will not release mid-Run, so a refusal stops the probe. A
+    transient storage fault should not permanently strand the Run without
+    a transcript.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    outcomes = [TimeoutError("busy"), True]
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "conv-a")
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.TranscriptHarvester",
+        lambda cid, path: type("H", (), {"fast_forward": lambda self: -1,
+                                         "poll": lambda self: [],
+                                         "latest_response": None})(),
+    )
+
+    def flaky(*_args, **_kwargs):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(runner, "claim_conversation", flaky, raising=False)
+
+    supervisor = RunSupervisor("run-1")
+    supervisor._observe_conversation()
+    assert supervisor.conversation_id is None
+    assert supervisor.conversation_claim_declined is False
+
+    supervisor._observe_conversation(force=True)
+    assert supervisor.conversation_id == "conv-a"

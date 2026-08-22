@@ -447,9 +447,22 @@ class RunSupervisor:
         is not going to release it mid-Run, and retrying would only relog.
         """
         conversation_id = str(self.conversation_id)
-        claimed = True
-        with suppress(Exception):
+        try:
             claimed = runtime.claim_conversation(self.run_id, conversation_id)
+        except Exception as error:
+            # A claim that could not be decided is not a claim. Defaulting to
+            # success would restore the duplicate-reader race precisely when
+            # storage is degraded or contended, which is when two Runs are
+            # most likely to be competing for it. Unlike a refusal this is
+            # not final: a holder will not release mid-Run, but a lock
+            # timeout or filesystem fault can clear, so the probe continues.
+            self.conversation_id = None
+            self._log(
+                "conversation_claim_failed",
+                conversation=conversation_id,
+                error=f"{type(error).__name__}: {error}",
+            )
+            return False
         if not claimed:
             self.conversation_id = None
             self.conversation_claim_declined = True

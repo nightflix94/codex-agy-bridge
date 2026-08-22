@@ -321,3 +321,43 @@ matched neither half and rejected every model that exists, including the
 bridge's own default. It went unnoticed because `RunRequest.prepare` skips
 validation when the model equals the default, leaving the default working and
 every override broken. Both spellings are now accepted (`82ce640`).
+
+---
+
+## 7. Known limitation: a refused claim stops a reader, not a writer
+
+`core.claim_conversation()` decides Conversation ownership under `start.lock`,
+and `create_run()` refuses a Conversation a live Run already holds. Between
+them, two Runs can no longer *begin* reading one Conversation.
+
+One case remains open. A fresh Run learns its Conversation only after Antigravity
+has created it, so by the time the claim is evaluated its child is already
+running and writing turns. If a continuation reserved that same id in the
+interim, the losing Run declines the Conversation and stops harvesting it — it
+can no longer publish the holder's answer — but **its Antigravity child keeps
+appending to that transcript**. The holder is still harvesting, so the holder can
+consume the loser's response.
+
+The protection is therefore asymmetric: the loser is isolated, the winner is not.
+
+Closing it means acting on the losing Run's process, and the options all carry
+real cost:
+
+- **Terminate the loser.** Its agent may be mid-edit in a real repository, so
+  this destroys work that was validly started. The Run was not at fault; it
+  correlated second by an accident of timing.
+- **Let it finish, unharvested.** Its edits land, its answer is readable from
+  its own `terminal.log`, and the holder is left to be defended some other way.
+- **Retry the claim.** Needs a policy that does not exist: how long a Run waits,
+  what it does meanwhile, and what happens if the holder outlives it.
+
+None of these is a small change, and the first is destructive in a way the
+defect is not. It is recorded here rather than settled hastily.
+
+Exposure is narrow. The window is the microseconds between correlation and the
+claim, and a caller must name a Conversation id it has no supported way to learn
+that early — run state carries the id only once the claim has written it. The
+window is now reported: a refused claim writes `conversation_claim_conflict` to
+`bridge.log` naming the holder, so this stops being a silent race and starts
+being an observable one. Decide the process policy once there is evidence it
+fires.
