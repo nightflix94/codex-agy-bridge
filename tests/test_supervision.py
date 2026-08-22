@@ -2208,15 +2208,14 @@ def test_continuation_ignores_a_concurrent_runs_response(monkeypatch, tmp_path):
     assert supervisor._completion_is_stable("the other run's answer") is False
 
 
-def test_a_foreign_input_after_our_own_disarms_transcript_completion(
-    monkeypatch, tmp_path
-):
-    """Ordering cannot attribute a response once another writer appears.
+def test_a_later_input_does_not_disable_completion(monkeypatch, tmp_path):
+    """Follow-up input is normal, not evidence of another writer.
 
-    A_input, B_input, B_response is a valid interleaving: the response sits
-    above this Run's own input and would otherwise be accepted as its
-    answer. Seeing an input that is not ours is proof another Run is
-    writing here, so transcript evidence can no longer be trusted.
+    agy_run_input delivers text that legitimately differs from the Run's
+    original prompt, and an interactive turn produces several such inputs.
+    Treating any non-matching USER_INPUT as foreign disabled transcript
+    completion for the rest of the Run, stranding it until the hard
+    timeout, which for interactive Runs is an hour past its own timeout.
     """
     state = {
         "run_id": "run-1",
@@ -2224,7 +2223,8 @@ def test_a_foreign_input_after_our_own_disarms_transcript_completion(
         "timeout_seconds": 10,
         "completion_marker": "DONE_MARKER",
         "prompt": "my own prompt",
-        "requested_conversation_id": "shared-conversation",
+        "execution_mode": "interactive",
+        "requested_conversation_id": "conversation-1",
     }
     records = [
         {
@@ -2237,19 +2237,19 @@ def test_a_foreign_input_after_our_own_disarms_transcript_completion(
             "step_index": 11,
             "source": "USER_EXPLICIT",
             "type": "USER_INPUT",
-            "content": "the other run's prompt",
+            "content": "also please tidy the imports",
         },
         {
             "step_index": 12,
             "source": "MODEL",
             "type": "PLANNER_RESPONSE",
             "status": "DONE",
-            "content": "the other run's answer",
+            "content": "Tidied the imports.",
         },
     ]
 
     class FakeHarvester:
-        latest_response = "the other run's answer"
+        latest_response = "Tidied the imports."
 
         def __init__(self, _conversation_id, _path):
             pass
@@ -2269,5 +2269,4 @@ def test_a_foreign_input_after_our_own_disarms_transcript_completion(
     supervisor = RunSupervisor("run-1")
     supervisor._observe_conversation()
 
-    assert supervisor.done_response_step_index is None
-    assert supervisor._completion_is_stable("the other run's answer") is False
+    assert supervisor.done_response_step_index == 12
