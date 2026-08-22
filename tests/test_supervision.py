@@ -2270,3 +2270,80 @@ def test_a_later_input_does_not_disable_completion(monkeypatch, tmp_path):
     supervisor._observe_conversation()
 
     assert supervisor.done_response_step_index == 12
+
+
+def test_a_conflicting_conversation_claim_is_recorded(monkeypatch, tmp_path, capsys):
+    """A fresh Run persists its resolved id outside start.lock.
+
+    Start-time ownership cannot see an id that has not been written yet, so
+    a continuation reserving it in that window leaves two live writers.
+    Detection here is read-only and deliberately does not change the Run:
+    it makes an otherwise invisible race visible in bridge.log.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "update_state", lambda _run_id, **changes: changes)
+    monkeypatch.setattr(
+        runner, "conversation_from_log", lambda _path: "contested-conversation"
+    )
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.TranscriptHarvester",
+        lambda _conversation_id, _path: type(
+            "H", (), {"fast_forward": lambda self: -1, "poll": lambda self: [],
+                      "latest_response": None}
+        )(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "active_runs",
+        lambda: [
+            {"run_id": "run-1", "conversation_id": None},
+            {"run_id": "run-other", "conversation_id": "contested-conversation"},
+        ],
+        raising=False,
+    )
+
+    RunSupervisor("run-1")._observe_conversation()
+
+    out = capsys.readouterr().out
+    assert "event=conversation_claim_conflict" in out
+    assert "holder=run-other" in out
+    assert "conversation=contested-conversation" in out
+
+
+def test_an_uncontested_claim_is_not_reported(monkeypatch, tmp_path, capsys):
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "update_state", lambda _run_id, **changes: changes)
+    monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "mine")
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.TranscriptHarvester",
+        lambda _conversation_id, _path: type(
+            "H", (), {"fast_forward": lambda self: -1, "poll": lambda self: [],
+                      "latest_response": None}
+        )(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "active_runs",
+        lambda: [{"run_id": "run-1", "conversation_id": None}],
+        raising=False,
+    )
+
+    RunSupervisor("run-1")._observe_conversation()
+
+    assert "conversation_claim_conflict" not in capsys.readouterr().out

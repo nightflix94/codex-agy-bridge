@@ -21,6 +21,7 @@ conversation_for_prompt_after = core.conversation_for_prompt_after
 conversation_from_log = core.conversation_from_log
 final_response = core.final_response
 acknowledge_cancel = core.acknowledge_cancel
+active_runs = core.active_runs
 claim_run = core.claim_run
 mark_running = core.mark_run_running
 load_state = core.load_state

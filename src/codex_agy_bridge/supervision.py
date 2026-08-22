@@ -334,6 +334,7 @@ class RunSupervisor:
                     conversation=self.conversation_id,
                     source=source,
                 )
+                self._report_claim_conflict()
             if self.conversation_id:
                 self.harvester = TranscriptHarvester(
                     str(self.conversation_id),
@@ -439,6 +440,43 @@ class RunSupervisor:
                 },
             },
         )
+
+    def _report_claim_conflict(self) -> None:
+        """Record another live Run already holding the Conversation we resolved.
+
+        create_run refuses a Conversation held by a live Run, but a fresh Run
+        writes its resolved id after correlating, outside that lock, so a
+        continuation reserving the id in between is invisible to the check.
+
+        This only reports. Two live writers cannot be untangled from the
+        transcript afterwards, and stopping a Run whose agent is already
+        working is a heavier decision than a diagnostic should make. The
+        point is that the race stops being silent.
+        """
+        with suppress(Exception):
+            holder = next(
+                (
+                    state
+                    for state in runtime.active_runs()
+                    if state.get("run_id") != self.run_id
+                    and self.conversation_id
+                    in {
+                        state.get("requested_conversation_id"),
+                        state.get("conversation_id"),
+                    }
+                ),
+                None,
+            )
+            if holder is not None:
+                self._log(
+                    "conversation_claim_conflict",
+                    conversation=self.conversation_id,
+                    holder=holder.get("run_id"),
+                    detail=(
+                        "another live Run holds this Conversation; "
+                        "transcript evidence here may not belong to this Run"
+                    ),
+                )
 
     def _observe_progress_stall(self) -> str | None:
         if (
