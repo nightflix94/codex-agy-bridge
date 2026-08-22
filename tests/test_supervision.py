@@ -2038,3 +2038,54 @@ def test_a_real_answer_in_the_pane_still_completes(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
 
     assert RunSupervisor("run-1")._terminal_completion_response() is not None
+
+
+def test_supervisor_records_its_decisions_to_bridge_log(monkeypatch, tmp_path, capsys):
+    """bridge.log is the runner's stdout, and it was never written to.
+
+    state.json records what a Run decided; nothing recorded why. The two
+    questions that cost the most to answer after the fact are which evidence
+    completed a Run and where its Conversation id came from.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "tmux_session": "agy-run-1",
+    }
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "update_state", lambda _run_id, **changes: changes)
+
+    supervisor = RunSupervisor("run-1")
+    supervisor._log("conversation_resolved", conversation="abc", source="agy_log")
+    supervisor._finish(status="completed", result="done", return_code=0)
+
+    out = capsys.readouterr().out
+    assert "event=conversation_resolved" in out
+    assert "source=agy_log" in out
+    assert "run=run-1" in out
+    assert "event=finished" in out
+    assert "status=completed" in out
+
+
+def test_bridge_log_never_breaks_a_run(monkeypatch, tmp_path):
+    """Diagnostics are best-effort: a closed stdout must not fail the Run."""
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    supervisor = RunSupervisor("run-1")
+
+    def explode(*_args, **_kwargs):
+        raise OSError("stdout is gone")
+
+    monkeypatch.setattr("builtins.print", explode)
+    supervisor._log("anything", detail="value")

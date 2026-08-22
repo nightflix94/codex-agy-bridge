@@ -84,6 +84,7 @@ class RunSupervisor:
         self.next_correlation_event_at: float | None = None
         self.launched_monotonic = time.monotonic()
         self.interactive_waiting_after_step: int | None = None
+        self.completion_source: str | None = None
         self.done_response_step_index: int | None = None
         self.done_response_seen_at: float | None = None
         self.prompt_detector = PromptDetector(
@@ -95,6 +96,28 @@ class RunSupervisor:
             ),
             clock=time.monotonic,
         )
+
+    def _log(self, event: str, **fields: object) -> None:
+        """Write one diagnostic line to the runner's stdout, i.e. bridge.log.
+
+        session-events.jsonl tells a caller what a Run decided. This tells
+        whoever has to explain it afterwards *why*: which evidence completed
+        the Run, and where its Conversation id came from. Neither is
+        recoverable from state.json once the Run is over.
+
+        Diagnostics must never fail a Run, so every error here is swallowed.
+        """
+        with suppress(Exception):
+            detail = " ".join(
+                f"{key}={value}"
+                for key, value in fields.items()
+                if value is not None
+            )
+            stamp = datetime.now(UTC).isoformat()
+            print(
+                f"{stamp} run={self.run_id} event={event} {detail}".rstrip(),
+                flush=True,
+            )
 
     def execute(self) -> int:
         """Run the complete lifecycle behind one small interface."""
@@ -186,6 +209,14 @@ class RunSupervisor:
                 "agy_pid": agy_pid,
             },
         )
+        self._log(
+            "launched",
+            agy_pid=agy_pid,
+            session=self.session,
+            model=self.state.get("model"),
+            surface=self.state.get("execution_surface"),
+            prompt_chars=len(str(self.state.get("prompt") or "")),
+        )
         self._auto_open_terminal()
         return True
 
@@ -243,6 +274,13 @@ class RunSupervisor:
             self._deliver_interactive_input()
             response = self._completion_response()
             if self._completion_is_stable(response):
+                marker = str(self.state.get("completion_marker") or "")
+                self._log(
+                    "completion_accepted",
+                    evidence=self.completion_source,
+                    marker="present" if marker and marker in (response or "")
+                    else "absent",
+                )
                 self._finish(
                     status="completed",
                     result=runtime.clean_response(
@@ -275,10 +313,20 @@ class RunSupervisor:
             # reported a creation yet, and an agy whose log wording differs.
             self.conversation_id = runtime.conversation_from_log(
                 self.directory / "agy.log"
-            ) or runtime.conversation_for_prompt_after(
-                str(self.state["prompt"]),
-                started_after=self.launched_at,
             )
+            source = "agy_log"
+            if not self.conversation_id:
+                self.conversation_id = runtime.conversation_for_prompt_after(
+                    str(self.state["prompt"]),
+                    started_after=self.launched_at,
+                )
+                source = "prompt_scan"
+            if self.conversation_id:
+                self._log(
+                    "conversation_resolved",
+                    conversation=self.conversation_id,
+                    source=source,
+                )
             if self.conversation_id:
                 self.harvester = TranscriptHarvester(
                     str(self.conversation_id),
@@ -508,7 +556,13 @@ class RunSupervisor:
         visible only in the terminal. Gating this on the surface left every
         production Run - all of which are foreground - unable to finish.
         """
-        return self._response() or self._terminal_completion_response()
+        response = self._response()
+        if response:
+            self.completion_source = "transcript"
+            return response
+        response = self._terminal_completion_response()
+        self.completion_source = "terminal" if response else None
+        return response
 
     def _terminal_completion_response(self) -> str | None:
         return self.completion.terminal_response(self.session)
@@ -587,6 +641,13 @@ class RunSupervisor:
         elif status != "completed":
             with suppress(OSError):
                 path.unlink()
+        self._log(
+            "finished",
+            status=status,
+            return_code=return_code,
+            conversation=self.conversation_id,
+            error=error,
+        )
         session_events.append_event(
             self.directory,
             _terminal_event_kind(status),
