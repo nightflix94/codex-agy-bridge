@@ -182,6 +182,7 @@ class RunRequest:
             effective_prompt = format_task_packet(
                 effective_prompt,
                 completion_marker=marker,
+                workspace=str(self.workspace),
                 artifact_dir=artifact_dir,
                 expected_file=self.expected_file,
             )

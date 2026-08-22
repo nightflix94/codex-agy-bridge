@@ -59,6 +59,8 @@ class RunState(TypedDict, total=False):
     agy_pid: int | None
     result: str | None
     result_source: str | None
+    workspace_scratch_escape_path: str | None
+    workspace_scratch_escape_step: int | None
     error: str | None
     command: list[str]
     launched_at: float

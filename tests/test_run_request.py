@@ -77,6 +77,9 @@ def test_run_request_prepares_identity_and_initial_state(tmp_path):
     assert state["prompt"].startswith("Task:\ndo work")
     assert "\nAcceptance:\n" in state["prompt"]
     assert "\nConstraints:\n" in state["prompt"]
+    assert f"Primary workspace directory: {workspace.resolve()}" in state["prompt"]
+    assert "Run project commands in that workspace" in state["prompt"]
+    assert "not in Antigravity's global scratch directory" in state["prompt"]
     assert "Write reports or handoff files under:" in state["prompt"]
     assert "verify they exist and are non-empty before finishing" in state["prompt"]
     assert state["artifact_dir"].endswith("/state/runs/run-1/artifacts")

@@ -202,7 +202,7 @@ vision, see [docs/MCP_VISION.md](docs/MCP_VISION.md).
 
 | Tool | Purpose |
 | --- | --- |
-| `agy_run_start` | Start, continue, or open an interactive foreground run |
+| `agy_run_start` | Start, continue, or open a run; task mode accepts an optional expected-file gate |
 | `agy_run_wait` | Short-poll until selected runs emit sparse wake events |
 | `agy_run_observe` | Read full, status, transcript, or raw terminal views |
 | `agy_run_input` | Send input with optional event/transcript preconditions |

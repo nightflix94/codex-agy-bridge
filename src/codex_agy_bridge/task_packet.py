@@ -7,6 +7,7 @@ def format_task_packet(
     prompt: str,
     *,
     completion_marker: str,
+    workspace: str,
     artifact_dir: str | None = None,
     expected_file: str | None = None,
 ) -> str:
@@ -21,6 +22,15 @@ def format_task_packet(
         "",
         "Constraints:",
         "- Follow the user's instructions and the workspace conventions.",
+        f"- Primary workspace directory: {workspace}",
+        (
+            "- Run project commands in that workspace and resolve relative project "
+            "paths against it."
+        ),
+        (
+            "- Write requested project files inside that workspace, not in "
+            "Antigravity's global scratch directory."
+        ),
     ]
     if artifact_dir:
         lines.extend(

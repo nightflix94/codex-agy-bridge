@@ -138,23 +138,29 @@ def agy_run_start(
     model: str | None = DEFAULT_MODEL,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
+    expected_file: str | None = None,
 ) -> dict[str, Any]:
     """Start or continue one foreground Antigravity Run.
 
     mode="task" starts a normal bridge-owned task. mode="interactive" starts a
     persistent conversation session that should be used sparingly. Supplying
     conversation_id continues that exact Antigravity conversation.
-    Use agy_start_with_expected_file for reviews and other artifact-producing tasks.
+    expected_file optionally makes task completion require one fresh, non-empty file
+    inside the workspace. agy_start_with_expected_file provides the same gate as a
+    dedicated tool for reviews and other artifact-producing tasks.
     dangerously_skip_permissions must be true; the bridge always forwards
     --dangerously-skip-permissions to Antigravity.
     """
     if mode not in {"task", "interactive"}:
         raise ValueError("mode must be 'task' or 'interactive'")
+    if mode == "interactive" and expected_file is not None:
+        raise ValueError("expected_file is only supported for mode='task'")
     kwargs: dict[str, Any] = {
         "prompt": prompt,
         "workspace": workspace,
         "timeout_seconds": timeout_seconds,
         "conversation_id": conversation_id,
+        "expected_file": expected_file,
         "dangerously_skip_permissions": dangerously_skip_permissions,
         "model": model,
         "sandbox": sandbox,

@@ -183,6 +183,40 @@ def test_start_with_expected_file_forwards_expected_file(monkeypatch, tmp_path):
     }
 
 
+def test_run_start_forwards_optional_expected_file(monkeypatch, tmp_path):
+    state = {
+        "run_id": "run-1",
+        "status": "queued",
+        "prompt": "private",
+        "completion_marker": "private",
+        "expected_file": str(tmp_path / "primes.txt"),
+    }
+
+    def create_run(**kwargs):
+        assert kwargs["expected_file"] == "primes.txt"
+        return state
+
+    monkeypatch.setattr(server.orchestration, "create_run", create_run)
+
+    result = server.agy_run_start(
+        prompt="write primes",
+        workspace=str(tmp_path),
+        expected_file="primes.txt",
+    )
+
+    assert result["expected_file"] == str(tmp_path / "primes.txt")
+
+
+def test_interactive_run_rejects_expected_file(tmp_path):
+    with pytest.raises(ValueError, match="expected_file.*mode='task'"):
+        server.agy_run_start(
+            prompt="talk",
+            workspace=str(tmp_path),
+            mode="interactive",
+            expected_file="answer.txt",
+        )
+
+
 def test_review_commit_returns_auth_required_payload(monkeypatch, tmp_path):
     payload = {
         "status": "auth_required",

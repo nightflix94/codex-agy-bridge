@@ -121,6 +121,7 @@ async def test_stdio_initialization_and_tool_contract(tmp_path):
     assert "visible_terminal" not in start.inputSchema["properties"]
     assert start.inputSchema["properties"]["sandbox"]["default"] is False
     assert "additional_directories" in start.inputSchema["properties"]
+    assert "expected_file" in start.inputSchema["properties"]
     assert "Start or continue" in start.description
     assert (
         start.inputSchema["properties"]["dangerously_skip_permissions"]["default"]

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
 import traceback
 from contextlib import suppress
 from datetime import UTC, datetime
+from pathlib import Path
 
 from codex_agy_bridge import (
     core,
@@ -21,6 +23,7 @@ from codex_agy_bridge.execution import TmuxSession
 from codex_agy_bridge.prompt_detector import PromptDetector
 from codex_agy_bridge.run_completion import (
     CompletionMonitor,
+    CompletionOutcome,
     marker_is_echoed_task_prompt,
 )
 from codex_agy_bridge.state import RunState
@@ -28,6 +31,14 @@ from codex_agy_bridge.transcript import TranscriptHarvester, planner_response
 
 AGENT_FAILURE_MARKER = "agent execution terminated due to error"
 AGENT_ERROR_ID_PATTERN = re.compile(r"error id:\s*([^\s]+)", re.IGNORECASE)
+SCRATCH_FILE_MUTATION_TOOLS = frozenset(
+    {
+        "write_to_file",
+        "replace_file_content",
+        "multi_replace_file_content",
+    }
+)
+SCRATCH_FILE_PATH_FIELDS = ("TargetFile", "target_file", "path")
 
 
 def _marker_is_echoed_task_prompt(text: str, marker_at: int) -> bool:
@@ -85,6 +96,12 @@ class RunSupervisor:
         self.launched_monotonic = time.monotonic()
         self.interactive_waiting_after_step: int | None = None
         self.completion_source: str | None = None
+        self.workspace_scratch_escape_path = self.state.get(
+            "workspace_scratch_escape_path"
+        )
+        self.workspace_scratch_escape_step = self.state.get(
+            "workspace_scratch_escape_step"
+        )
         # A resumed Conversation can be shared with another live Run, whose
         # records land above this Run's baseline and would otherwise arm
         # completion here. Evidence only counts after this Run's own prompt
@@ -283,6 +300,24 @@ class RunSupervisor:
             response = self._completion_response()
             if self._completion_is_stable(response):
                 marker = str(self.state.get("completion_marker") or "")
+                cleaned = runtime.clean_response(
+                    response, str(self.state["completion_marker"])
+                )
+                workspace_error = self._workspace_scratch_escape_error()
+                if workspace_error is not None:
+                    self._log(
+                        "completion_rejected",
+                        evidence=self.completion_source,
+                        reason="workspace_scratch_escape",
+                        path=self.workspace_scratch_escape_path,
+                    )
+                    self._finish(
+                        status="failed",
+                        result=cleaned,
+                        error=workspace_error,
+                    )
+                    self._stop(reason="workspace_scratch_escape")
+                    return 1
                 self._log(
                     "completion_accepted",
                     evidence=self.completion_source,
@@ -291,9 +326,7 @@ class RunSupervisor:
                 )
                 self._finish(
                     status="completed",
-                    result=runtime.clean_response(
-                        response, str(self.state["completion_marker"])
-                    ),
+                    result=cleaned,
                 )
                 self._stop(reason="completion_accepted")
                 return 0
@@ -387,6 +420,7 @@ class RunSupervisor:
                     else:
                         self.done_response_step_index = record["step_index"]
                         self.done_response_seen_at = time.monotonic()
+                self._observe_workspace_scratch_escape(record)
             if latest_step > self.latest_transcript_step_index:
                 self.latest_transcript_step_index = latest_step
                 self.transcript_advanced_at = time.monotonic()
@@ -397,6 +431,68 @@ class RunSupervisor:
                     progress_log=self.progress_path,
                 )
             self._observe_prompt(records)
+
+    def _observe_workspace_scratch_escape(self, record: dict[str, object]) -> None:
+        """Record a structured file write into Antigravity's reused scratch root."""
+        if self.workspace_scratch_escape_path is not None:
+            return
+        step_index = record.get("step_index")
+        if (
+            not isinstance(step_index, int)
+            or self.own_input_step_index is None
+            or step_index <= self.own_input_step_index
+        ):
+            return
+        tool_calls = record.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            return
+        workspace = Path(str(self.state["workspace"])).resolve()
+        scratch = (core.AGY_ROOT / "scratch").resolve()
+        if workspace == scratch or workspace.is_relative_to(scratch):
+            return
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            if tool_call.get("name") not in SCRATCH_FILE_MUTATION_TOOLS:
+                continue
+            arguments = tool_call.get("args")
+            if not isinstance(arguments, dict):
+                continue
+            raw_path = next(
+                (
+                    arguments[field]
+                    for field in SCRATCH_FILE_PATH_FIELDS
+                    if isinstance(arguments.get(field), str)
+                ),
+                None,
+            )
+            target = _tool_path(raw_path)
+            if target is None or not target.is_relative_to(scratch):
+                continue
+            self.workspace_scratch_escape_path = str(target)
+            self.workspace_scratch_escape_step = step_index
+            with suppress(Exception):
+                runtime.update_state(
+                    self.run_id,
+                    workspace_scratch_escape_path=str(target),
+                    workspace_scratch_escape_step=step_index,
+                )
+            self._log(
+                "workspace_scratch_escape_detected",
+                path=target,
+                step=step_index,
+                tool=tool_call.get("name"),
+            )
+            return
+
+    def _workspace_scratch_escape_error(self) -> str | None:
+        if self.workspace_scratch_escape_path is None:
+            return None
+        return (
+            "Antigravity wrote a requested project file to its global scratch "
+            "directory instead of the Run workspace: "
+            f"{self.workspace_scratch_escape_path}"
+        )
 
     def _observe_correlation(self) -> None:
         """Report a Run whose Conversation has not correlated yet.
@@ -681,6 +777,13 @@ class RunSupervisor:
             return_code,
             canceled=self.cancel_path.exists(),
         )
+        workspace_error = self._workspace_scratch_escape_error()
+        if outcome.status == "completed" and workspace_error is not None:
+            outcome = CompletionOutcome(
+                status="failed",
+                result=outcome.result,
+                error=workspace_error,
+            )
         self._finish(
             status=outcome.status,
             result=outcome.result,
@@ -780,3 +883,18 @@ def _terminal_event_kind(status: str) -> str:
     if status == "canceled":
         return "run_canceled"
     return "run_failed"
+
+
+def _tool_path(value: object) -> Path | None:
+    """Decode Antigravity's occasionally JSON-quoted structured path argument."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    decoded = value
+    with suppress(json.JSONDecodeError):
+        candidate = json.loads(decoded)
+        if isinstance(candidate, str):
+            decoded = candidate
+    try:
+        return Path(decoded).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None

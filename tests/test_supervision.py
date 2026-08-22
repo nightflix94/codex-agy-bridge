@@ -1006,7 +1006,11 @@ def test_supervisor_ignores_completion_marker_in_current_task_packet(
         "tmux_session": "agy-run-1",
     }
     (tmp_path / "terminal.log").write_text(
-        format_task_packet("research the question", completion_marker="DONE_MARKER")
+        format_task_packet(
+            "research the question",
+            completion_marker="DONE_MARKER",
+            workspace=str(tmp_path),
+        )
         + "\nCurrently signed in as user@example.com\n",
         encoding="utf-8",
     )
@@ -1264,6 +1268,131 @@ def test_supervisor_rejects_a_planner_block_truncated_before_its_tool_call(
     assert supervisor.done_response_step_index is None
     clock.advance(30.0)
     assert not supervisor._completion_is_stable(partial)
+
+
+def test_supervisor_fails_a_run_that_writes_into_antigravity_scratch(
+    monkeypatch, tmp_path
+):
+    """Replay the structured write target from the escaped primes Run."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    agy_root = tmp_path / "agy-root"
+    scratch_target = agy_root / "scratch" / "primes.py"
+    state = {
+        "run_id": "run-1",
+        "status": "running",
+        "workspace": str(workspace),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    records = [
+        {
+            "step_index": 0,
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "status": "DONE",
+            "content": "do work",
+        },
+        {
+            "step_index": 2,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "tool_calls": [
+                {
+                    "name": "write_to_file",
+                    "args": {"TargetFile": json.dumps(str(scratch_target))},
+                }
+            ],
+        },
+        {
+            "step_index": 3,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "content": "Created and verified primes.py.\nDONE_MARKER",
+        },
+    ]
+
+    class FakeHarvester:
+        latest_response = "Created and verified primes.py.\nDONE_MARKER"
+
+        def poll(self):
+            current = list(records)
+            records.clear()
+            return current
+
+    updates = []
+
+    def update_state(_run_id, **changes):
+        state.update(changes)
+        updates.append(dict(changes))
+        return dict(state)
+
+    monkeypatch.setattr(core, "AGY_ROOT", agy_root)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "update_state", update_state)
+    (tmp_path / "agy.exit-code").write_text("0\n", encoding="utf-8")
+
+    supervisor = RunSupervisor("run-1")
+    supervisor.conversation_id = "conversation-1"
+    supervisor.harvester = FakeHarvester()
+    supervisor._observe_conversation()
+
+    assert supervisor.workspace_scratch_escape_path == str(scratch_target)
+    assert supervisor.workspace_scratch_escape_step == 2
+    assert updates[0]["workspace_scratch_escape_path"] == str(scratch_target)
+    assert supervisor._finish_after_exit() == 1
+    assert updates[-1]["status"] == "failed"
+    assert "global scratch" in updates[-1]["error"]
+    assert not (tmp_path / "final-result.txt").exists()
+
+
+def test_live_completion_is_rejected_after_a_workspace_scratch_escape(
+    monkeypatch, tmp_path
+):
+    state = {
+        "run_id": "run-1",
+        "status": "running",
+        "workspace": str(tmp_path / "workspace"),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    updates = []
+    stops = []
+
+    def update_state(_run_id, **changes):
+        state.update(changes)
+        updates.append(dict(changes))
+        return dict(state)
+
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "update_state", update_state)
+    monkeypatch.setattr(runner, "run_active", lambda _session: True)
+    monkeypatch.setattr(runner, "stop_run", lambda session: stops.append(session))
+
+    supervisor = RunSupervisor("run-1")
+    supervisor.session = "agy-run-1"
+    supervisor.workspace_scratch_escape_path = "/agy/scratch/primes.py"
+    monkeypatch.setattr(supervisor, "_observe_conversation", lambda: None)
+    monkeypatch.setattr(supervisor, "_observe_correlation", lambda: None)
+    monkeypatch.setattr(supervisor, "_observe_progress_stall", lambda: None)
+    monkeypatch.setattr(supervisor, "_deliver_interactive_input", lambda: None)
+    monkeypatch.setattr(
+        supervisor,
+        "_completion_response",
+        lambda: "Created primes.py.\nDONE_MARKER",
+    )
+    monkeypatch.setattr(supervisor, "_completion_is_stable", lambda _response: True)
+
+    assert supervisor._monitor_until_exit() == 1
+    assert updates[-1]["status"] == "failed"
+    assert "global scratch" in updates[-1]["error"]
+    assert stops == ["agy-run-1"]
 
 
 def test_continuation_run_ignores_prior_conversation_steps(monkeypatch, tmp_path):
