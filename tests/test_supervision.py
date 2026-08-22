@@ -2089,3 +2089,32 @@ def test_bridge_log_never_breaks_a_run(monkeypatch, tmp_path):
 
     monkeypatch.setattr("builtins.print", explode)
     supervisor._log("anything", detail="value")
+
+
+def test_supervisor_records_why_it_stopped_the_session(monkeypatch, tmp_path, capsys):
+    """agy.exit-code is the bridge's teardown, not the agent's outcome.
+
+    The supervisor decides the outcome and then kills the tmux session, so
+    the wrapper records SIGTERM. 35 of 36 archived runs show 143 including
+    verified-correct ones, with nothing on disk explaining it.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "tmux_session": "agy-run-1",
+    }
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(runner, "stop_run", lambda _session: None)
+
+    supervisor = RunSupervisor("run-1")
+    supervisor.session = "agy-run-1"
+    supervisor._stop(reason="completion_accepted")
+
+    out = capsys.readouterr().out
+    assert "event=session_stopped" in out
+    assert "reason=completion_accepted" in out
+    assert "note=exit_code_is_bridge_teardown" in out

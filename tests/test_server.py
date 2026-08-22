@@ -234,3 +234,15 @@ def test_goal_start_target_returns_auth_required_payload(monkeypatch):
         target_name="alpha",
         prompt="work",
     ) == payload
+
+
+def test_run_wait_documents_its_slice_cap():
+    """A silently capped wait is a trap: the cap must be in the description.
+
+    agy_run_wait returns after AGY_BRIDGE_MCP_WAIT_SLICE_SECONDS regardless
+    of the timeout asked for, disclosing the cap only in the response body,
+    which a caller sizing a wait has not seen yet.
+    """
+    doc = server.agy_run_wait.__doc__ or ""
+    assert "AGY_BRIDGE_MCP_WAIT_SLICE_SECONDS" in doc
+    assert "120" in doc

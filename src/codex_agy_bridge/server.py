@@ -222,6 +222,13 @@ def agy_run_wait(
     any_attention, any_terminal, all_terminal, any_event, plus aliases
     attention, terminal, finished, finish, complete, completed, result,
     all_finished, all_complete, and all_completed.
+
+    One call blocks for at most AGY_BRIDGE_MCP_WAIT_SLICE_SECONDS, 120 by
+    default, however large timeout_seconds is. Runs of several minutes are
+    ordinary, so expect to call this repeatedly: returning with
+    matched=false only means this slice elapsed, never that the Run failed.
+    The response reports requested_timeout_seconds, effective_timeout_seconds
+    and capped_by so the shortfall is visible after the fact.
     """
     return orchestration.wait(
         run_ids,

@@ -261,14 +261,14 @@ class RunSupervisor:
         deadline = time.monotonic() + self._hard_timeout_seconds()
         while runtime.run_active(self.session):
             if self.cancel_path.exists():
-                self._stop()
+                self._stop(reason="cancel_requested")
                 self._finish(status="canceled")
                 return 0
             self._observe_conversation()
             self._observe_correlation()
             stall_error = self._observe_progress_stall()
             if stall_error is not None:
-                self._stop()
+                self._stop(reason="progress_stalled")
                 self._finish(status="failed", error=stall_error)
                 return 1
             self._deliver_interactive_input()
@@ -287,10 +287,10 @@ class RunSupervisor:
                         response, str(self.state["completion_marker"])
                     ),
                 )
-                self._stop()
+                self._stop(reason="completion_accepted")
                 return 0
             if time.monotonic() >= deadline:
-                self._stop()
+                self._stop(reason="hard_timeout")
                 self._finish(status="failed", error="hard timeout exceeded")
                 return 1
             time.sleep(0.5)
@@ -595,7 +595,21 @@ class RunSupervisor:
         )
         return 0 if outcome.status == "completed" else 1
 
-    def _stop(self) -> None:
+    def _stop(self, *, reason: str = "unspecified") -> None:
+        """Terminate the tmux session, recording why.
+
+        The outcome is decided before the session is killed, so the wrapper
+        records SIGTERM and agy.exit-code reads 143 on almost every Run,
+        including successful ones. That exit status describes this teardown
+        and not the agent, and state.return_code is left unset for exactly
+        that reason. Say so where the evidence lives.
+        """
+        self._log(
+            "session_stopped",
+            reason=reason,
+            session=self.session,
+            note="exit_code_is_bridge_teardown",
+        )
         runtime.stop_run(self.session)
 
     def _expected_file_is_ready(self) -> bool:
