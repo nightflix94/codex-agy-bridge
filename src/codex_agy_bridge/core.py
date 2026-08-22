@@ -403,6 +403,11 @@ def conversation_for_prompt_after(
     )
 
 
+def conversation_from_log(log_path: Path) -> str | None:
+    """Read the Conversation Antigravity names in one Run's own log file."""
+    return transcript_domain.conversation_from_log(log_path)
+
+
 def _user_content_matches_prompt(content: str, prompt: str) -> bool:
     """Compatibility facade for the Antigravity wrapped-prompt matcher."""
     return transcript_domain._user_content_matches_prompt(content, prompt)

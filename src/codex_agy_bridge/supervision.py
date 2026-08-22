@@ -269,7 +269,13 @@ class RunSupervisor:
             now = time.monotonic()
             if not force and now < self.next_conversation_probe_at:
                 return
-            self.conversation_id = runtime.conversation_for_prompt_after(
+            # Antigravity names the Conversation it created in this Run's own
+            # log, which identifies it without comparing prompt text. The
+            # prompt scan remains as a fallback: it covers a log that has not
+            # reported a creation yet, and an agy whose log wording differs.
+            self.conversation_id = runtime.conversation_from_log(
+                self.directory / "agy.log"
+            ) or runtime.conversation_for_prompt_after(
                 str(self.state["prompt"]),
                 started_after=self.launched_at,
             )

@@ -13,6 +13,7 @@ from codex_agy_bridge.transcript import (
     compact_step_records,
     conversation_for_prompt_after,
     conversation_for_workspace,
+    conversation_from_log,
     transcript_path,
 )
 
@@ -485,3 +486,59 @@ def test_truncated_match_rejects_an_inconsistent_byte_count(tmp_path):
     assert (
         conversation_for_prompt_after(prompt, started_after=0, brain_dir=brain) is None
     )
+
+
+# Captured verbatim from a real agy.log.
+_AGY_LOG_LINE = (
+    "ERROR: logging before google.Init: I0822 13:46:05.628471     287 "
+    "server.go:1074] Created conversation {conversation_id}\n"
+)
+
+
+def test_conversation_is_read_from_the_run_log(tmp_path):
+    """Antigravity names its own Conversation in the Run's --log-file.
+
+    That identifies it without comparing prompt text, so prompt rewriting
+    cannot defeat it and concurrent Runs cannot be confused for each other.
+    """
+    log = tmp_path / "agy.log"
+    log.write_text(
+        "starting up\n"
+        + _AGY_LOG_LINE.format(
+            conversation_id="85ffff6e-41c9-4961-b1ea-7120071b1737"
+        )
+        + "Streaming conversation 85ffff6e-41c9-4961-b1ea-7120071b1737\n",
+        encoding="utf-8",
+    )
+
+    assert conversation_from_log(log) == "85ffff6e-41c9-4961-b1ea-7120071b1737"
+
+
+def test_conversation_from_log_is_absent_when_nothing_was_created(tmp_path):
+    log = tmp_path / "agy.log"
+    log.write_text("starting up\nno conversation here\n", encoding="utf-8")
+
+    assert conversation_from_log(log) is None
+    assert conversation_from_log(tmp_path / "missing.log") is None
+
+
+def test_conversation_from_log_refuses_an_ambiguous_log(tmp_path):
+    """Two creations cannot identify one Run, so neither is trusted."""
+    log = tmp_path / "agy.log"
+    log.write_text(
+        _AGY_LOG_LINE.format(conversation_id="85ffff6e-41c9-4961-b1ea-7120071b1737")
+        + _AGY_LOG_LINE.format(conversation_id="2b25d6f6-e15f-40c5-8bbf-ecb3b42973a8"),
+        encoding="utf-8",
+    )
+
+    assert conversation_from_log(log) is None
+
+
+def test_conversation_from_log_rejects_an_unusable_id(tmp_path):
+    """A path segment out of a log must never be trusted unvalidated."""
+    log = tmp_path / "agy.log"
+    log.write_text(
+        "server.go:1074] Created conversation ../../etc/passwd\n", encoding="utf-8"
+    )
+
+    assert conversation_from_log(log) is None

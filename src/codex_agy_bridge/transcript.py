@@ -34,6 +34,39 @@ def _validate_conversation_id(conversation_id: str) -> str:
     return conversation_id
 
 
+CREATED_CONVERSATION_RE = re.compile(r"Created conversation (\S+)")
+CONVERSATION_LOG_SCAN_BYTES = 512_000
+
+
+def conversation_from_log(log_path: Path) -> str | None:
+    """Return the Conversation Antigravity reports creating in its own log.
+
+    Every Run is given its own --log-file, so this identifies the Conversation
+    without comparing prompt text. It survives the prompt rewriting that
+    defeats a brain-directory scan, and it cannot pair concurrent Runs with
+    one another's Conversations, which that scan can do whenever two Runs
+    carry similar prompts.
+
+    Only an unambiguous log is trusted: a log naming several creations
+    identifies none of them, and an id that is not a usable path segment is
+    refused rather than joined onto a filesystem path.
+    """
+    try:
+        with log_path.open("rb") as handle:
+            head = handle.read(CONVERSATION_LOG_SCAN_BYTES)
+    except OSError:
+        return None
+    found = set(
+        CREATED_CONVERSATION_RE.findall(head.decode("utf-8", errors="replace"))
+    )
+    if len(found) != 1:
+        return None
+    try:
+        return _validate_conversation_id(found.pop())
+    except ValueError:
+        return None
+
+
 TRUNCATED_PROMPT_RE = re.compile(r"\n<truncated (?P<bytes>\d+) bytes>\n")
 
 

@@ -18,6 +18,7 @@ from codex_agy_bridge.state import RunState
 clean_response = core.clean_response
 compact_step_records = core.compact_step_records
 conversation_for_prompt_after = core.conversation_for_prompt_after
+conversation_from_log = core.conversation_from_log
 final_response = core.final_response
 acknowledge_cancel = core.acknowledge_cancel
 claim_run = core.claim_run
