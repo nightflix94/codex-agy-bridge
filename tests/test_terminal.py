@@ -419,3 +419,56 @@ def test_terminal_send_text_timeout_is_structured(monkeypatch):
         "--",
         "yes",
     ]
+
+
+def _launch_capturing(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        terminal.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs))
+        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+    )
+    terminal.launch(
+        "agy-target",
+        ["/tmp/fake-agy", "--print", "work"],
+        workspace=str(tmp_path),
+        terminal_log=tmp_path / "terminal.log",
+        progress_log=tmp_path / "terminal-progress.log",
+        stdout_log=tmp_path / "agy.stdout.log",
+        stderr_log=tmp_path / "agy.stderr.log",
+    )
+    return calls[0][0]
+
+
+def test_launch_does_not_leak_the_bridge_virtualenv(monkeypatch, tmp_path):
+    """The agent works in its own project, not in the bridge's.
+
+    Running the server under `uv run` exports VIRTUAL_ENV and puts that
+    venv's bin first on PATH. tmux inherits the server's environment, so an
+    agent running tests in an unrelated project picked up the bridge's
+    interpreter instead of its own.
+    """
+    venv = "/opt/bridge/.venv"
+    monkeypatch.setenv("VIRTUAL_ENV", venv)
+    monkeypatch.setenv("PATH", f"{venv}/bin:/usr/local/bin:/usr/bin:/bin")
+
+    # tmux ignores -e PATH, so the script must do it: asserting the flag was
+    # passed would pass while the child still saw the polluted PATH.
+    script = _launch_capturing(monkeypatch, tmp_path)[-1]
+
+    assert "unset VIRTUAL_ENV" in script
+    assert "export PATH" in script
+    assert f"{venv}/bin" not in script.split("export PATH")[0].split("PATH=")[-1]
+    assert "/usr/local/bin:/usr/bin:/bin" in script
+
+
+def test_launch_leaves_an_unpolluted_path_alone(monkeypatch, tmp_path):
+    """Without a virtualenv to strip, PATH is not rewritten."""
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
+
+    script = _launch_capturing(monkeypatch, tmp_path)[-1]
+
+    assert "unset VIRTUAL_ENV" in script
+    assert "export PATH" not in script

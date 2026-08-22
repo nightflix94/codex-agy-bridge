@@ -143,7 +143,14 @@ def test_terminate_process_group_falls_back_when_group_signal_is_denied(monkeypa
 
 def test_launch_process_uses_tmux(monkeypatch, tmp_path):
     calls = []
-    for name in ("AGY_CMD", "AGY_BRIDGE_STATE_DIR", "AGY_BRIDGE_AGY_ROOT"):
+    # VIRTUAL_ENV joins these: the launcher forwards a sanitised PATH when the
+    # bridge is running inside a virtualenv, which this asserts the shape of.
+    for name in (
+        "AGY_CMD",
+        "AGY_BRIDGE_STATE_DIR",
+        "AGY_BRIDGE_AGY_ROOT",
+        "VIRTUAL_ENV",
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(runner, "run_dir", lambda _: tmp_path)
     monkeypatch.setattr(

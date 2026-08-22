@@ -14,6 +14,33 @@ from pathlib import Path
 DEFAULT_TMUX_TIMEOUT_SECONDS = 2.0
 DEFAULT_CHILD_START_TIMEOUT_SECONDS = 2.0
 AUTO_ATTACH_DISABLED = frozenset({"0", "false", "no"})
+# The bridge may itself be launched inside a virtualenv - `uv run` exports
+# VIRTUAL_ENV and puts that venv's bin first on PATH. tmux inherits the
+# server's environment, so without this the agent would run an unrelated
+# project's tooling against the bridge's own interpreter.
+INHERITED_PYTHON_VARS = (
+    "VIRTUAL_ENV",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PYTHONEXECUTABLE",
+)
+
+
+def _path_without_virtualenv() -> str | None:
+    """Return PATH with the bridge's own virtualenv bin removed, if present."""
+    path = os.environ.get("PATH")
+    virtual_env = os.environ.get("VIRTUAL_ENV")
+    if not path or not virtual_env:
+        return None
+    venv_bin = os.path.normpath(os.path.join(virtual_env, "bin"))
+    kept = [
+        entry
+        for entry in path.split(os.pathsep)
+        if entry and os.path.normpath(entry) != venv_bin
+    ]
+    cleaned = os.pathsep.join(kept)
+    return cleaned if cleaned != path else None
 CONTROL_STRING_RE = re.compile(
     r"(?:\x1b[P^_X]|[\x90\x98\x9e\x9f]).*?(?:\x1b\\|\x9c)",
     re.DOTALL,
@@ -167,10 +194,18 @@ def launch(
         value = os.environ.get(name)
         if value is not None:
             session_environment.extend(["-e", f"{name}={value}"])
+    # tmux -e cannot remove a variable, and it ignores PATH outright - PATH
+    # comes from the tmux server's own environment - so both are corrected
+    # inside the session's shell, which runs before the child is exec'd.
+    shed_environment = f"unset {' '.join(INHERITED_PYTHON_VARS)}"
+    clean_path = _path_without_virtualenv()
+    if clean_path is not None:
+        shed_environment += f"\nPATH={shlex.quote(clean_path)}\nexport PATH"
     if execution_surface == "foreground":
         script = "\n".join(
             [
                 "set -u",
+                shed_environment,
                 f"{child_command} < /dev/tty &",
                 "agy_pid=$!",
                 *publish_child_pid,
@@ -189,6 +224,7 @@ def launch(
         script = "\n".join(
             [
                 "set -u",
+                shed_environment,
                 f"{child_command} >> {shlex.quote(str(stdout_log))} "
                 f"2>> {shlex.quote(str(stderr_log))} &",
                 "agy_pid=$!",
