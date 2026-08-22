@@ -532,7 +532,12 @@ def test_claim_conversation_refuses_an_id_held_by_another_live_run(tmp_path):
         )
         (tmp_path / "active" / run_id).write_text("", encoding="utf-8")
 
-    assert core.claim_conversation("run-loser", "conv-a", state_root=tmp_path) is False
+    assert core.claim_conversation_with_holder(
+        "run-loser", "conv-a", state_root=tmp_path
+    ) == {
+        "claimed": False,
+        "holder_run_id": "run-holder",
+    }
     assert core.load_state("run-loser", tmp_path).get("conversation_id") is None
     assert core.load_state("run-holder", tmp_path)["conversation_id"] == "conv-a"
 
@@ -582,3 +587,31 @@ def test_claim_conversation_ignores_a_stale_active_marker(tmp_path):
     (tmp_path / "active" / "run-vanished").write_text("", encoding="utf-8")
 
     assert core.claim_conversation("run-1", "conv-a", state_root=tmp_path) is True
+
+
+def test_ownership_holders_ignore_a_terminal_run_with_a_stale_marker(tmp_path):
+    core.ensure_private_directory(tmp_path / "active")
+    core.atomic_write_json(
+        core.state_path("run-finished", state_root=tmp_path),
+        {
+            "run_id": "run-finished",
+            "status": "completed",
+            "conversation_id": "conv-a",
+        },
+    )
+    (tmp_path / "active" / "run-finished").write_text("", encoding="utf-8")
+
+    assert core._holders_for_ownership(tmp_path) == []
+
+
+def test_active_runs_preserves_an_unreadable_active_marker(tmp_path):
+    active_dir = tmp_path / "active"
+    active_dir.mkdir()
+    state = core.state_path("run-holder", state_root=tmp_path)
+    state.parent.mkdir(parents=True)
+    state.write_text("{not json", encoding="utf-8")
+    marker = active_dir / "run-holder"
+    marker.write_text("", encoding="utf-8")
+
+    assert core.active_runs(tmp_path) == []
+    assert marker.exists()

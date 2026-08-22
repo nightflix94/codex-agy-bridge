@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO, TextIO, TypeAlias
+from typing import Any, BinaryIO, TextIO, TypeAlias, TypedDict
 
 from codex_agy_bridge import transcript as transcript_domain
 from codex_agy_bridge.exceptions import RunNotFoundError
@@ -45,6 +45,13 @@ JSONValue: TypeAlias = (
 )
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 PRIVATE_STATE_FIELDS = frozenset({"prompt", "command", "completion_marker"})
+
+
+class ConversationClaimResult(TypedDict):
+    """Atomic outcome of trying to assign one Conversation to a Run."""
+
+    claimed: bool
+    holder_run_id: str | None
 
 
 def utc_now() -> str:
@@ -269,9 +276,15 @@ def _holders_for_ownership(state_root: Path) -> list[RunState]:
         if path.name.startswith(".") or not path.is_file():
             continue
         try:
-            holders.append(load_state(path.name, state_root))
+            state = load_state(path.name, state_root)
         except FileNotFoundError:
             continue
+        if state.get("status") not in ACTIVE_STATUSES:
+            # A readable terminal state cannot own a Conversation even when
+            # its marker survived a crash between state replacement and
+            # sentinel cleanup.
+            continue
+        holders.append(state)
     return holders
 
 
@@ -280,6 +293,19 @@ def claim_conversation(
     conversation_id: str,
     state_root: Path | None = None,
 ) -> bool:
+    """Compatibility result for callers that only need success or refusal."""
+    return claim_conversation_with_holder(
+        run_id,
+        conversation_id,
+        state_root,
+    )["claimed"]
+
+
+def claim_conversation_with_holder(
+    run_id: str,
+    conversation_id: str,
+    state_root: Path | None = None,
+) -> ConversationClaimResult:
     """Record a resolved Conversation only if no other live Run holds it.
 
     Correlating and persisting used to be two steps, so a continuation
@@ -288,8 +314,9 @@ def claim_conversation(
     that happens, so the check and the write share start.lock - the same
     lock create_run holds while refusing a held Conversation.
 
-    Returns whether the claim succeeded. A caller that loses must not read
-    that Conversation: its terminal evidence is per-Run and stays usable.
+    Returns the decision and, on refusal, the holder observed under the same
+    lock. A caller that loses must not read that Conversation: its terminal
+    evidence is per-Run and stays usable.
     """
     from filelock import FileLock
 
@@ -303,13 +330,16 @@ def claim_conversation(
                 state.get("requested_conversation_id"),
                 state.get("conversation_id"),
             }:
-                return False
+                return {
+                    "claimed": False,
+                    "holder_run_id": str(state["run_id"]),
+                }
         update_state(
             run_id,
             actual_state_root,
             conversation_id=conversation_id,
         )
-        return True
+        return {"claimed": True, "holder_run_id": None}
 
 
 def active_runs(state_root: Path | None = None) -> list[RunState]:
@@ -324,9 +354,14 @@ def active_runs(state_root: Path | None = None) -> list[RunState]:
         run_id = path.name
         try:
             state = load_state(run_id, actual_state_root)
-        except (OSError, json.JSONDecodeError, ValueError):
+        except FileNotFoundError:
+            # A marker with no state cannot represent a live holder.
             with suppress(OSError):
                 path.unlink()
+            continue
+        except (OSError, json.JSONDecodeError, ValueError):
+            # Preserve evidence that an active Run exists. Ownership callers
+            # must fail closed until its state is readable again.
             continue
         if state.get("status") not in ACTIVE_STATUSES:
             with suppress(OSError):

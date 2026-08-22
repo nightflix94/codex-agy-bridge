@@ -2636,3 +2636,41 @@ def test_continuation_is_refused_for_a_resolved_conversation(monkeypatch, tmp_pa
             timeout_seconds=900,
             conversation_id="resolved-conversation",
         )
+
+
+def test_continuation_fails_closed_on_unreadable_active_holder(monkeypatch, tmp_path):
+    """Startup must not erase the only evidence of an unknown live holder."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state_root = isolate_state_root(monkeypatch, tmp_path)
+    active_dir = state_root / "active"
+    active_dir.mkdir(parents=True)
+    holder_state = core.state_path("run-holder", state_root=state_root)
+    holder_state.parent.mkdir(parents=True)
+    holder_state.write_text("{not json", encoding="utf-8")
+    marker = active_dir / "run-holder"
+    marker.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "codex_agy_bridge._orchestrator.AntigravityCli.capabilities",
+        lambda _self: type(
+            "Capabilities",
+            (),
+            {
+                "sandbox": True,
+                "additional_directories": True,
+                "interactive": True,
+            },
+        )(),
+    )
+    orch = RunnerOrchestrator(state_root=state_root)
+
+    with pytest.raises(ValueError):
+        orch.create_run(
+            prompt="continue that work",
+            workspace=str(workspace),
+            timeout_seconds=900,
+            conversation_id="shared-conversation",
+        )
+
+    assert marker.exists()
+    assert list((state_root / "runs").iterdir()) == [holder_state.parent]

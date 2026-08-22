@@ -53,6 +53,8 @@ class RunStore(GoalSchedulerStore, Protocol):
 
     def list_active_runs(self) -> list[RunState]: ...
 
+    def list_ownership_holders(self) -> list[RunState]: ...
+
 
 class DiskRunStore:
     """Production storage adapter persisting states as JSON files on disk."""
@@ -161,6 +163,10 @@ class DiskRunStore:
         """Query and filter active runs from active registry directory."""
         return core.active_runs(state_root=self.state_root)
 
+    def list_ownership_holders(self) -> list[RunState]:
+        """Strictly load every active Run relevant to Conversation ownership."""
+        return core._holders_for_ownership(self.state_root)
+
 
 class MemoryRunStore:
     """Mock/Testing storage adapter keeping all states in-memory."""
@@ -250,3 +256,7 @@ class MemoryRunStore:
             for state in self.runs.values()
             if state.get("status") in ACTIVE_STATUSES
         ]
+
+    def list_ownership_holders(self) -> list[RunState]:
+        """Return the in-memory active Runs used for ownership decisions."""
+        return self.list_active_runs()

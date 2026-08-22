@@ -69,9 +69,14 @@ class RunJanitor:
                 run_id = path.name
                 try:
                     state = self.store.get_run(run_id)
-                except Exception:
+                except FileNotFoundError:
                     with suppress(OSError):
                         path.unlink()
+                    continue
+                except Exception:
+                    # An unreadable state may still belong to a live Run and
+                    # may be the only evidence reserving its Conversation.
+                    # Preserve the marker so ownership decisions fail closed.
                     continue
                 if state.get("status") not in ACTIVE_STATUSES:
                     with suppress(OSError):

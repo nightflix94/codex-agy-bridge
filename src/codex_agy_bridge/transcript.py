@@ -81,7 +81,26 @@ def transcript_path(conversation_id: str, *, brain_dir: Path) -> Path:
     )
 
 
-def _planner_response(record: dict[str, Any]) -> str | None:
+INCOMPLETE_PLANNER_PREFIXES = (
+    "i will ",
+    "i'll ",
+    "i’ll ",
+    "i am going to ",
+    "i'm going to ",
+    "i’m going to ",
+    "let me ",
+    "next, i will ",
+    "next i will ",
+)
+
+
+def looks_like_incomplete_planner_response(content: str) -> bool:
+    """Return whether a planner block only announces work still to be done."""
+    normalized = " ".join(content.casefold().split())
+    return normalized.startswith(INCOMPLETE_PLANNER_PREFIXES)
+
+
+def planner_response(record: dict[str, Any]) -> str | None:
     """Project a record onto a final answer, ignoring pending tool work.
 
     A PLANNER_RESPONSE reaches status DONE once the model finishes emitting
@@ -97,6 +116,7 @@ def _planner_response(record: dict[str, Any]) -> str | None:
         and not record.get("tool_calls")
         and isinstance(content, str)
         and content.strip()
+        and not looks_like_incomplete_planner_response(content)
     ):
         return content
     return None
@@ -182,7 +202,7 @@ class ConversationTranscript:
     def final_response(self) -> str | None:
         response = None
         for step in self.read_steps():
-            projected = _planner_response(step)
+            projected = planner_response(step)
             if projected is not None:
                 response = projected
         return response
@@ -288,7 +308,7 @@ class ConversationTranscript:
         index = record.get("step_index")
         if isinstance(index, int):
             self.latest_step_index = index
-        response = _planner_response(record)
+        response = planner_response(record)
         if response is not None:
             self.latest_response = response
 

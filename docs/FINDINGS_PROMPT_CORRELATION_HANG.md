@@ -369,3 +369,29 @@ directory out of band.
 The window is now reported rather than silent: a refused claim writes
 `conversation_claim_conflict` to `bridge.log` naming the holder. Decide the
 process policy once there is evidence it fires.
+
+---
+
+## 8. Post-review hardening (2026-08-22)
+
+An adversarial review found three remaining defects around the shipped fixes.
+They are closed without changing the process-lifecycle decision in section 7.
+
+1. **Startup ownership now fails closed too.** `create_run()` obtains its
+   admission snapshot from the store's strict ownership enumeration. Ordinary
+   active-run listing and the janitor preserve a marker whose state exists but
+   cannot be read, so neither can erase the only evidence that an unknown Run
+   may hold the requested Conversation. A marker with no state and a readable
+   terminal state remain non-holders.
+2. **A conflict carries its holder out of the atomic decision.** The runner no
+   longer rescans active Runs after a refused claim. The holder id selected
+   under `start.lock` is returned with the refusal and written directly to
+   `bridge.log`, so a holder finishing between decision and logging cannot make
+   the diagnostic disappear. The boolean `core.claim_conversation()` surface
+   remains compatible for callers that do not need the holder identity.
+3. **Forward-looking planner prose is not a final answer.** A real archived
+   `PLANNER_RESPONSE` ended mid-sentence before its intended `tool_calls` field
+   was persisted: `I will write the test file .../format`. It therefore passed
+   the existing no-tool filter. Transcript projection and completion stability
+   now reject planner blocks that only announce future work, including this
+   exact archived prefix.

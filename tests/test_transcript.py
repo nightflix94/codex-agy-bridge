@@ -68,6 +68,24 @@ def test_tool_calling_planner_response_is_not_a_final_response(tmp_path):
     )
 
 
+def test_truncated_forward_plan_without_tool_calls_is_not_a_final_response(tmp_path):
+    """A record can end before Antigravity persists its intended tool call."""
+    path = tmp_path / "transcript.jsonl"
+    partial = _record(
+        8,
+        content=(
+            "I will write the test file "
+            "`/Users/example/workspace/test/format"
+        ),
+    )
+    _write_records(path, partial)
+    harvester = TranscriptHarvester("conversation-1", path)
+
+    assert harvester.poll() == [partial]
+    assert harvester.latest_response is None
+    assert ConversationTranscript("conversation-1", path).final_response() is None
+
+
 def test_final_response_ignores_a_trailing_tool_call_step(tmp_path):
     path = tmp_path / "transcript.jsonl"
     narration = _record(2, content="I will run `git diff` next.")

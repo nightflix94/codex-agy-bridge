@@ -24,7 +24,7 @@ from codex_agy_bridge.run_completion import (
     marker_is_echoed_task_prompt,
 )
 from codex_agy_bridge.state import RunState
-from codex_agy_bridge.transcript import TranscriptHarvester
+from codex_agy_bridge.transcript import TranscriptHarvester, planner_response
 
 AGENT_FAILURE_MARKER = "agent execution terminated due to error"
 AGENT_ERROR_ID_PATTERN = re.compile(r"error id:\s*([^\s]+)", re.IGNORECASE)
@@ -376,9 +376,12 @@ class RunSupervisor:
                     and record["step_index"] > self.own_input_step_index
                 ):
                     self.latest_response_step_index = record["step_index"]
-                    if record.get("tool_calls"):
+                    if record.get("tool_calls") or planner_response(record) is None:
                         # Narration before a tool call, not an answer: the run
                         # is still working, so it must not look idle-complete.
+                        # A planner block can also be truncated before its
+                        # intended tool_calls field is recorded; forward-looking
+                        # prose is not final evidence in that case either.
                         self.done_response_step_index = None
                         self.done_response_seen_at = None
                     else:
@@ -452,7 +455,7 @@ class RunSupervisor:
         """
         conversation_id = str(self.conversation_id)
         try:
-            claimed = runtime.claim_conversation(self.run_id, conversation_id)
+            claim = runtime.claim_conversation(self.run_id, conversation_id)
         except Exception as error:
             # A claim that could not be decided is not a claim. Defaulting to
             # success would restore the duplicate-reader race precisely when
@@ -467,10 +470,13 @@ class RunSupervisor:
                 error=f"{type(error).__name__}: {error}",
             )
             return False
-        if not claimed:
+        if not claim["claimed"]:
             self.conversation_id = None
             self.conversation_claim_declined = True
-            self._report_claim_conflict(conversation_id)
+            self._report_claim_conflict(
+                conversation_id,
+                str(claim["holder_run_id"]),
+            )
             return False
         self._log(
             "conversation_resolved",
@@ -479,7 +485,11 @@ class RunSupervisor:
         )
         return True
 
-    def _report_claim_conflict(self, conversation_id: str) -> None:
+    def _report_claim_conflict(
+        self,
+        conversation_id: str,
+        holder_run_id: str,
+    ) -> None:
         """Record another live Run already holding the Conversation we resolved.
 
         create_run refuses a Conversation held by a live Run, but a fresh Run
@@ -491,30 +501,15 @@ class RunSupervisor:
         working is a heavier decision than a diagnostic should make. The
         point is that the race stops being silent.
         """
-        with suppress(Exception):
-            holder = next(
-                (
-                    state
-                    for state in runtime.active_runs()
-                    if state.get("run_id") != self.run_id
-                    and conversation_id
-                    in {
-                        state.get("requested_conversation_id"),
-                        state.get("conversation_id"),
-                    }
-                ),
-                None,
-            )
-            if holder is not None:
-                self._log(
-                    "conversation_claim_conflict",
-                    conversation=conversation_id,
-                    holder=holder.get("run_id"),
-                    detail=(
-                        "another live Run holds this Conversation; "
-                        "transcript evidence here may not belong to this Run"
-                    ),
-                )
+        self._log(
+            "conversation_claim_conflict",
+            conversation=conversation_id,
+            holder=holder_run_id,
+            detail=(
+                "another live Run holds this Conversation; "
+                "transcript evidence here may not belong to this Run"
+            ),
+        )
 
     def _observe_progress_stall(self) -> str | None:
         if (

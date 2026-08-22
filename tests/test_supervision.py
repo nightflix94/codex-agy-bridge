@@ -1220,6 +1220,52 @@ def test_supervisor_does_not_complete_on_intermediate_planner_response(
     assert not supervisor._completion_is_stable(narration)
 
 
+def test_supervisor_rejects_a_planner_block_truncated_before_its_tool_call(
+    monkeypatch, tmp_path
+):
+    """Replay the archived prefix that previously completed mid-task."""
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    partial = (
+        "I will write the test file "
+        "`/Users/example/workspace/test/format"
+    )
+    clock = FakeClock(100.0)
+
+    class FakeHarvester:
+        latest_response = partial
+
+        def poll(self):
+            return [
+                {
+                    "step_index": 8,
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "content": partial,
+                }
+            ]
+
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+
+    supervisor = RunSupervisor("run-1")
+    supervisor.conversation_id = "conversation-1"
+    supervisor.harvester = FakeHarvester()
+    supervisor.completion_idle_seconds = 2.0
+    supervisor._observe_conversation()
+
+    assert supervisor.done_response_step_index is None
+    clock.advance(30.0)
+    assert not supervisor._completion_is_stable(partial)
+
+
 def test_continuation_run_ignores_prior_conversation_steps(monkeypatch, tmp_path):
     state = {
         "run_id": "run-1",
@@ -2285,7 +2331,10 @@ def test_an_uncontested_claim_is_not_reported(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(runner, "update_state", lambda _run_id, **changes: changes)
     monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "mine")
     monkeypatch.setattr(
-        runner, "claim_conversation", lambda *_a, **_k: True, raising=False
+        runner,
+        "claim_conversation",
+        lambda *_a, **_k: {"claimed": True, "holder_run_id": None},
+        raising=False,
     )
     monkeypatch.setattr(
         "codex_agy_bridge.supervision.TranscriptHarvester",
@@ -2328,12 +2377,12 @@ def test_a_lost_conversation_claim_leaves_the_run_uncorrelated(
     monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
     monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "contested")
     monkeypatch.setattr(
-        runner, "claim_conversation", lambda *_args, **_kwargs: False, raising=False
-    )
-    monkeypatch.setattr(
         runner,
-        "active_runs",
-        lambda: [{"run_id": "run-other", "conversation_id": "contested"}],
+        "claim_conversation",
+        lambda *_args, **_kwargs: {
+            "claimed": False,
+            "holder_run_id": "run-other",
+        },
         raising=False,
     )
     monkeypatch.setattr(
@@ -2412,7 +2461,10 @@ def test_an_undecidable_claim_is_retried_unlike_a_refusal(monkeypatch, tmp_path)
         "completion_marker": "DONE_MARKER",
         "prompt": "do work",
     }
-    outcomes = [TimeoutError("busy"), True]
+    outcomes = [
+        TimeoutError("busy"),
+        {"claimed": True, "holder_run_id": None},
+    ]
     monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
     monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
     monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "conv-a")

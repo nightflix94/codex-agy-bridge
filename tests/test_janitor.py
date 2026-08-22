@@ -82,6 +82,25 @@ def test_janitor_ignores_active_registry_temp_files(tmp_path):
     assert temporary.exists()
 
 
+def test_janitor_preserves_marker_for_unreadable_active_state(tmp_path):
+    state_root = tmp_path / "state"
+    active_dir = state_root / "active"
+    active_dir.mkdir(parents=True)
+    state = core.state_path("run-holder", state_root=state_root)
+    state.parent.mkdir(parents=True)
+    state.write_text("{not json", encoding="utf-8")
+    marker = active_dir / "run-holder"
+    marker.write_text("", encoding="utf-8")
+    orch = RunnerOrchestrator(
+        state_root=state_root,
+        process_manager=MockProcessManager(),
+    )
+
+    orch.run_janitor()
+
+    assert marker.exists()
+
+
 def test_janitor_stops_tmux_session_when_supervisor_is_dead(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

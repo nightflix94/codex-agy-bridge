@@ -9,6 +9,7 @@ from pathlib import Path
 
 from codex_agy_bridge import core, expected_artifact, terminal
 from codex_agy_bridge.state import RunState
+from codex_agy_bridge.transcript import looks_like_incomplete_planner_response
 
 INCOMPLETE_RESPONSE_PHRASES = (
     "i am waiting",
@@ -227,7 +228,9 @@ class CompletionMonitor:
 
 def looks_like_incomplete_response(response: str) -> bool:
     text = " ".join(response.casefold().split())
-    return any(phrase in text for phrase in INCOMPLETE_RESPONSE_PHRASES)
+    return looks_like_incomplete_planner_response(response) or any(
+        phrase in text for phrase in INCOMPLETE_RESPONSE_PHRASES
+    )
 
 
 def marker_is_echoed_task_prompt(text: str, marker_at: int) -> bool:

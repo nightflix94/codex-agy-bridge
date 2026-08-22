@@ -494,7 +494,11 @@ class RunnerOrchestrator:
         core.ensure_private_directory(self.state_root)
         # Hold start.lock only for dedup check + state write, NOT subprocess spawn.
         with FileLock(str(self.state_root / "start.lock"), timeout=10):
-            running = self.active_runs()
+            # Ownership and admission must not discard an active Run merely
+            # because its state is temporarily unreadable. The disk store's
+            # strict enumeration propagates that failure and leaves the start
+            # undecided; in-memory stores have no unreadable representation.
+            running = self.store.list_ownership_holders()
             duplicate = next(
                 (
                     state
