@@ -261,3 +261,31 @@ def test_result_metadata_tolerates_an_unrecorded_source(tmp_path):
     )
     assert got["result_source"] == "unknown"
     assert got["result_is_verbatim"] is False
+
+
+def test_chunked_reads_carry_result_provenance(tmp_path):
+    """Chunk mode must not launder a scraped result into a clean one.
+
+    Long results are the ones most likely to be lossy, and they are exactly
+    the ones a caller reads through offset_bytes. Reporting provenance only
+    on the metadata path would hide it precisely where it matters.
+    """
+    from codex_agy_bridge.run_observation import read_chunk
+
+    run_dir = tmp_path / "run-1"
+    (run_dir / "artifacts").mkdir(parents=True)
+    (run_dir / "final-result.txt").write_text("a" * 500, encoding="utf-8")
+    state = {
+        "run_id": "run-1",
+        "status": "completed",
+        "result_source": "terminal",
+        "artifact_dir": str(run_dir / "artifacts"),
+    }
+
+    chunk = read_chunk(state, run_dir, offset_bytes=0, max_bytes=100)
+    assert chunk["result_source"] == "terminal"
+    assert chunk["result_is_verbatim"] is False
+
+    tail = read_chunk(state, run_dir, offset_bytes=100, max_bytes=100)
+    assert tail["result_source"] == "terminal"
+    assert tail["result_is_verbatim"] is False

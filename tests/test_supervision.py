@@ -2118,3 +2118,91 @@ def test_supervisor_records_why_it_stopped_the_session(monkeypatch, tmp_path, ca
     assert "event=session_stopped" in out
     assert "reason=completion_accepted" in out
     assert "note=exit_code_is_bridge_teardown" in out
+
+
+def test_exit_classification_uses_terminal_evidence(monkeypatch, tmp_path):
+    """Terminal evidence must count at exit, not only while running.
+
+    The live loop can complete from the terminal, so a Run that exits
+    between polls with a valid marker in terminal.log and no transcript was
+    recorded failed despite having answered.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+        "execution_surface": "foreground",
+        "tmux_session": "agy-run-1",
+    }
+    (tmp_path / "agy.exit-code").write_text("0\n", encoding="utf-8")
+    (tmp_path / "terminal.log").write_text(
+        "Completion marker:\nDONE_MARKER\n\n"
+        "The report has been written to artifacts/report.md\nDONE_MARKER\n",
+        encoding="utf-8",
+    )
+    updates = []
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(
+        runner, "update_state", lambda _run_id, **changes: updates.append(changes)
+    )
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.RunSupervisor._observe_conversation",
+        lambda _self, **_kwargs: None,
+    )
+
+    assert RunSupervisor("run-1")._finish_after_exit() == 0
+    assert updates[-1]["status"] == "completed"
+    assert "artifacts/report.md" in updates[-1]["result"]
+    assert updates[-1]["result_source"] == "terminal"
+
+
+def test_continuation_ignores_a_concurrent_runs_response(monkeypatch, tmp_path):
+    """Two Runs can share one Conversation, and both append to it.
+
+    Dedup keys on prompt as well as conversation_id, so two continuations
+    of one Conversation run concurrently. A tool-free response written by
+    the other Run sits above this Run's baseline, and the marker-less
+    fallback would otherwise publish that Run's answer as this one's.
+    """
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "my own prompt",
+        "requested_conversation_id": "shared-conversation",
+    }
+    foreign = {
+        "step_index": 9,
+        "source": "MODEL",
+        "type": "PLANNER_RESPONSE",
+        "status": "DONE",
+        "content": "the other run's answer",
+    }
+
+    class FakeHarvester:
+        latest_response = "the other run's answer"
+
+        def __init__(self, _conversation_id, _path):
+            pass
+
+        def fast_forward(self):
+            return 4
+
+        def poll(self):
+            return [foreign]
+
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(
+        "codex_agy_bridge.supervision.TranscriptHarvester", FakeHarvester
+    )
+
+    supervisor = RunSupervisor("run-1")
+    supervisor._observe_conversation()
+
+    assert supervisor.done_response_step_index is None
+    assert supervisor._completion_is_stable("the other run's answer") is False

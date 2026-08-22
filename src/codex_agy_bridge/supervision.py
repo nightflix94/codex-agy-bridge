@@ -85,6 +85,13 @@ class RunSupervisor:
         self.launched_monotonic = time.monotonic()
         self.interactive_waiting_after_step: int | None = None
         self.completion_source: str | None = None
+        # A resumed Conversation can be shared with another live Run, whose
+        # records land above this Run's baseline and would otherwise arm
+        # completion here. Evidence only counts after this Run's own prompt
+        # appears. A fresh Conversation cannot be shared, so it starts open.
+        self.own_input_step_index: int | None = (
+            None if self.state.get("requested_conversation_id") else -1
+        )
         self.done_response_step_index: int | None = None
         self.done_response_seen_at: float | None = None
         self.prompt_detector = PromptDetector(
@@ -353,9 +360,20 @@ class RunSupervisor:
                 ):
                     latest_step = record["step_index"]
                 if (
+                    record.get("type") == "USER_INPUT"
+                    and isinstance(record.get("step_index"), int)
+                    and core._user_content_matches_prompt(
+                        str(record.get("content") or ""),
+                        str(self.state["prompt"]),
+                    )
+                ):
+                    self.own_input_step_index = record["step_index"]
+                if (
                     record.get("type") == "PLANNER_RESPONSE"
                     and record.get("status") == "DONE"
                     and isinstance(record.get("step_index"), int)
+                    and self.own_input_step_index is not None
+                    and record["step_index"] > self.own_input_step_index
                 ):
                     self.latest_response_step_index = record["step_index"]
                     if record.get("tool_calls"):
@@ -582,8 +600,11 @@ class RunSupervisor:
     def _finish_after_exit(self) -> int:
         self._observe_conversation(force=True)
         return_code = self._return_code()
-        response = self._response()
-        self.completion_source = "transcript" if response else None
+        # The live loop completes from terminal evidence, so exit must weigh
+        # the same evidence. A Run that exits between polls with a valid
+        # marker in terminal.log and no transcript had answered, and was
+        # being recorded failed for it.
+        response = self._completion_response()
         outcome = self.completion.after_exit(
             response,
             return_code,

@@ -2156,6 +2156,8 @@ def test_result_read_uses_independent_byte_offsets(tmp_path):
 
     assert first == {
         "run_id": "run",
+        "result_source": "unknown",
+        "result_is_verbatim": False,
         "offset_bytes": 0,
         "returned_bytes": 4,
         "total_bytes": 10,
@@ -2233,6 +2235,8 @@ def test_result_read_offset_beyond_eof_returns_empty_complete_chunk(tmp_path):
 
     assert result == {
         "run_id": "run",
+        "result_source": "unknown",
+        "result_is_verbatim": False,
         "offset_bytes": 10,
         "returned_bytes": 0,
         "total_bytes": 3,

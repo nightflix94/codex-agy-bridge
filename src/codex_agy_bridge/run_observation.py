@@ -527,8 +527,13 @@ def read_chunk(
     data, content = decoded
     next_offset = start + len(data)
     complete = next_offset >= total_bytes
+    # Long results are the ones most likely to be lossy and the ones read
+    # through this path, so provenance has to travel with every chunk.
+    chunk_source = state.get("result_source") or "unknown"
     return {
         "run_id": state["run_id"],
+        "result_source": chunk_source,
+        "result_is_verbatim": chunk_source == "transcript",
         "offset_bytes": offset_bytes,
         "returned_bytes": len(data),
         "total_bytes": total_bytes,
