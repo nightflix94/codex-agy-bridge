@@ -582,8 +582,10 @@ class RunSupervisor:
     def _finish_after_exit(self) -> int:
         self._observe_conversation(force=True)
         return_code = self._return_code()
+        response = self._response()
+        self.completion_source = "transcript" if response else None
         outcome = self.completion.after_exit(
-            self._response(),
+            response,
             return_code,
             canceled=self.cancel_path.exists(),
         )
@@ -637,6 +639,7 @@ class RunSupervisor:
             conversation_id=self.conversation_id,
             return_code=return_code,
             result=result,
+            result_source=self.completion_source if result else None,
             error=error,
             finished_at=finished_at,
         )

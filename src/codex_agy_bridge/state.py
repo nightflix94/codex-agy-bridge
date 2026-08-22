@@ -58,6 +58,7 @@ class RunState(TypedDict, total=False):
     runner_pid: int | None
     agy_pid: int | None
     result: str | None
+    result_source: str | None
     error: str | None
     command: list[str]
     launched_at: float

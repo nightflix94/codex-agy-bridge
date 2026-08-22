@@ -209,3 +209,55 @@ def test_orchestrator_observation_methods_delegate_unchanged(tmp_path: Path) -> 
         ),
         ("result_artifact_path", ("run-1",), {}),
     ]
+
+
+def test_result_metadata_reports_where_the_result_came_from(tmp_path):
+    """A caller cannot judge a result without knowing its channel.
+
+    A transcript answer is the model's own text. A terminal answer is
+    scraped from a TUI that collapses its own tool output, so it may be
+    partial even when it looks complete, and the agent's real reply may
+    only exist under artifacts/.
+    """
+    from codex_agy_bridge.run_observation import metadata
+
+    run_dir = tmp_path / "run-1"
+    (run_dir / "artifacts").mkdir(parents=True)
+    (run_dir / "final-result.txt").write_text("the answer", encoding="utf-8")
+
+    transcript_state = {
+        "run_id": "run-1",
+        "status": "completed",
+        "result": "the answer",
+        "result_source": "transcript",
+        "artifact_dir": str(run_dir / "artifacts"),
+    }
+    got = metadata(transcript_state, run_dir)
+    assert got["result_source"] == "transcript"
+    assert got["result_is_verbatim"] is True
+
+    scraped_state = dict(transcript_state, result_source="terminal")
+    got = metadata(scraped_state, run_dir)
+    assert got["result_source"] == "terminal"
+    assert got["result_is_verbatim"] is False
+
+
+def test_result_metadata_tolerates_an_unrecorded_source(tmp_path):
+    """Runs recorded before the field existed must still return metadata."""
+    from codex_agy_bridge.run_observation import metadata
+
+    run_dir = tmp_path / "run-1"
+    (run_dir / "artifacts").mkdir(parents=True)
+    (run_dir / "final-result.txt").write_text("the answer", encoding="utf-8")
+
+    got = metadata(
+        {
+            "run_id": "run-1",
+            "status": "completed",
+            "result": "the answer",
+            "artifact_dir": str(run_dir / "artifacts"),
+        },
+        run_dir,
+    )
+    assert got["result_source"] == "unknown"
+    assert got["result_is_verbatim"] is False

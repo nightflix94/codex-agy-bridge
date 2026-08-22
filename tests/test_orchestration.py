@@ -2064,6 +2064,8 @@ def test_result_returns_preview_and_read_metadata_for_large_artifact(tmp_path):
         "complete": True,
         "artifact_path": str(tmp_path / "runs" / "run" / "final-result.txt"),
         "read_with": "agy_run_result",
+        "result_source": "unknown",
+        "result_is_verbatim": False,
     }
     assert (tmp_path / "runs" / "run" / "final-result.txt").read_text() == "abcdef"
 
@@ -2450,6 +2452,8 @@ def test_goal_status_includes_completed_target_result_metadata(tmp_path):
             tmp_path / "state" / "runs" / run_id / "final-result.txt"
         ),
         "read_with": "agy_run_result",
+        "result_source": "unknown",
+        "result_is_verbatim": False,
     }
 
 

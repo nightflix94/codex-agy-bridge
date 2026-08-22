@@ -470,7 +470,14 @@ def metadata(state: RunState, run_dir: Path) -> dict[str, Any] | None:
             "utf-8",
             errors="replace",
         )
+    # A transcript result is the model's own text. A terminal result is
+    # scraped from a TUI that collapses its own tool output, so it can be
+    # partial while looking complete - the agent's real reply may exist only
+    # under artifacts/. A caller cannot judge the result without knowing this.
+    result_source = state.get("result_source") or "unknown"
     result: dict[str, Any] = {
+        "result_source": result_source,
+        "result_is_verbatim": result_source == "transcript",
         "preview": preview,
         "total_bytes": total_bytes,
         "complete": total_bytes <= RESULT_PREVIEW_BYTES,
