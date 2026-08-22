@@ -39,6 +39,7 @@ STATE_ROOT = Path(
 ).expanduser()
 LAST_CONVERSATIONS = AGY_ROOT / "cache" / "last_conversations.json"
 BRAIN_DIR = AGY_ROOT / "brain"
+SETTINGS_PATH = AGY_ROOT / "settings.json"
 
 JSONValue: TypeAlias = (
     "Mapping[str, Any] | list[Any] | str | int | float | bool | None"
@@ -72,6 +73,62 @@ def validate_identifier(value: str, label: str) -> str:
             "and be a single path segment"
         )
     return value
+
+
+def trusted_workspaces(settings_path: Path | None = None) -> list[Path] | None:
+    """Return Antigravity's trusted workspace roots, or None when unknown.
+
+    Antigravity gates every workspace behind a "Do you trust the contents of
+    this project?" prompt whose answer is persisted as ``trustedWorkspaces``
+    in its settings file. ``--dangerously-skip-permissions`` does not cover
+    that gate, so an untrusted workspace stalls a detached Run on a keypress
+    nobody can deliver.
+
+    None means the question cannot be answered here - no settings file, an
+    unreadable or malformed one, or no ``trustedWorkspaces`` key. Callers must
+    treat None as "proceed and let the prompt detector catch it", never as
+    "untrusted": rejecting on an unknown would break every Run on a machine
+    whose trust lives somewhere this function does not know how to read.
+    """
+    path = settings_path or SETTINGS_PATH
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(settings, Mapping):
+        return None
+    configured = settings.get("trustedWorkspaces")
+    if not isinstance(configured, list):
+        return None
+    roots: list[Path] = []
+    for entry in configured:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        with suppress(OSError, ValueError):
+            roots.append(Path(entry).expanduser().resolve())
+    return roots
+
+
+def workspace_is_trusted(
+    workspace: Path,
+    *,
+    settings_path: Path | None = None,
+) -> bool | None:
+    """Return whether one workspace is covered by Antigravity's trust list.
+
+    Trust is treated as inherited by subdirectories: a trusted root covers
+    everything beneath it. Erring toward trusted keeps this check from
+    rejecting a workspace Antigravity would in fact have accepted - a false
+    rejection blocks working setups, while a false acceptance only falls
+    through to the prompt detector, which reports the stall loudly.
+    """
+    roots = trusted_workspaces(settings_path)
+    if roots is None:
+        return None
+    resolved = workspace.expanduser().resolve()
+    return any(
+        resolved == root or resolved.is_relative_to(root) for root in roots
+    )
 
 
 def run_dir(run_id: str, state_root: Path | None = None) -> Path:

@@ -297,3 +297,57 @@ def test_auth_patterns_are_explicit_and_deduped():
         r"Sign in to Antigravity",
         r"Authenticate with Antigravity",
     ]
+
+
+def test_detector_emits_workspace_trust_attention_from_live_pane(tmp_path):
+    clock = FakeClock()
+    (tmp_path / "terminal.log").write_text(
+        "Accessing workspace:\n"
+        "/Volumes/WD500/XP/Github/happy-fleet\n"
+        "Do you trust the contents of this project?\n"
+        "Antigravity CLI requires permission to read, edit, and execute "
+        "files here.\n"
+        "> Yes, I trust this folder\n"
+        "  No, exit\n"
+        "↑/↓ Navigate · enter Confirm\n",
+        encoding="utf-8",
+    )
+    detector = PromptDetector(tmp_path, clock=clock)
+
+    detector.inspect()
+    clock.advance(1.0)
+    event = detector.inspect()
+
+    assert event is not None
+    assert event.kind == "needs_attention"
+    assert event.activity_state == "awaiting_user"
+    assert event.attention["reason"] == "workspace_trust_required"
+    # The question itself is reported, not whichever fragment is longest.
+    assert event.attention["prompt"] == "Do you trust the contents of this project?"
+    # Trusting a folder is the operator's call, so the bridge offers no input.
+    assert event.attention["suggested_inputs"] == []
+
+
+def test_trust_prompt_outranks_a_stale_approval_match(tmp_path):
+    """A trust gate blocks startup, so it must win over any earlier prompt."""
+    clock = FakeClock()
+    (tmp_path / "terminal.log").write_text(
+        "Do you want to proceed?\nDo you trust the contents of this project?\n",
+        encoding="utf-8",
+    )
+    detector = PromptDetector(tmp_path, clock=clock)
+
+    detector.inspect()
+    clock.advance(1.0)
+    event = detector.inspect()
+
+    assert event is not None
+    assert event.attention["reason"] == "workspace_trust_required"
+
+
+def test_trust_patterns_are_explicit_and_deduped():
+    assert prompt_detector.TRUST_PATTERNS == [
+        r"Do you trust the contents of this project\?",
+        r"Yes, I trust this folder",
+        r"requires permission to read, edit, and execute files here",
+    ]

@@ -126,6 +126,13 @@ def doctor(
             "antigravity_root": str(agy_root),
             "antigravity_root_readable": os.access(agy_root, os.R_OK),
         },
+        # Informational only. Antigravity gates an unfamiliar workspace behind
+        # an interactive trust prompt that --dangerously-skip-permissions does
+        # not answer, and a Run that hits it stalls until its timeout. This
+        # reports what the settings file says so an operator can pre-trust a
+        # path; it is deliberately not a gate, because a workspace absent from
+        # this list can still start fine.
+        "workspace_trust": _workspace_trust_report(),
         "capacity": {
             "active_runs": len(core.active_runs()),
             "configured_parallel_limit": _global_max_parallel(),
@@ -141,6 +148,16 @@ def doctor(
             "run_control_snapshot": RunControlSnapshot.from_run(run_id),
         }
     return report
+
+
+def _workspace_trust_report() -> dict[str, Any]:
+    """Report Antigravity's recorded workspace trust roots, if readable."""
+    roots = core.trusted_workspaces()
+    return {
+        "settings_path": str(core.SETTINGS_PATH),
+        "readable": roots is not None,
+        "trusted_roots": [str(root) for root in roots] if roots is not None else None,
+    }
 
 
 def _probe(

@@ -615,3 +615,74 @@ def test_active_runs_preserves_an_unreadable_active_marker(tmp_path):
 
     assert core.active_runs(tmp_path) == []
     assert marker.exists()
+
+
+def test_trusted_workspaces_reads_the_configured_roots(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"trustedWorkspaces": ["/a/project", "~/b"]}),
+        encoding="utf-8",
+    )
+
+    roots = core.trusted_workspaces(settings)
+
+    assert roots is not None
+    assert os.fspath(roots[0]) == "/a/project"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,  # no settings file at all
+        "not json{",
+        json.dumps(["a", "list", "not", "a", "mapping"]),
+        json.dumps({"colorScheme": "dark"}),  # no trustedWorkspaces key
+    ],
+)
+def test_trusted_workspaces_returns_none_when_the_answer_is_unknown(
+    tmp_path,
+    content,
+):
+    """Unknown must stay unknown: None, never an empty (== untrusted) list."""
+    settings = tmp_path / "settings.json"
+    if content is not None:
+        settings.write_text(content, encoding="utf-8")
+
+    assert core.trusted_workspaces(settings) is None
+
+
+def test_workspace_is_trusted_covers_subdirectories_of_a_trusted_root(tmp_path):
+    workspace = tmp_path / "repo" / "packages" / "api"
+    workspace.mkdir(parents=True)
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"trustedWorkspaces": [str(tmp_path / "repo")]}),
+        encoding="utf-8",
+    )
+
+    assert core.workspace_is_trusted(workspace, settings_path=settings) is True
+
+
+def test_workspace_is_trusted_is_false_for_a_path_outside_every_root(tmp_path):
+    workspace = tmp_path / "elsewhere"
+    workspace.mkdir()
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"trustedWorkspaces": [str(tmp_path / "repo")]}),
+        encoding="utf-8",
+    )
+
+    assert core.workspace_is_trusted(workspace, settings_path=settings) is False
+
+
+def test_workspace_is_trusted_is_unknown_without_readable_settings(tmp_path):
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+
+    assert (
+        core.workspace_is_trusted(
+            workspace,
+            settings_path=tmp_path / "missing.json",
+        )
+        is None
+    )

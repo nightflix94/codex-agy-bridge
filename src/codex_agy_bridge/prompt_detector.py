@@ -28,10 +28,19 @@ AUTH_PATTERNS = [
     r"Sign in to Antigravity",
     r"Authenticate with Antigravity",
 ]
+# Antigravity gates an unfamiliar workspace behind its own trust prompt, which
+# --dangerously-skip-permissions does not answer. It is an arrow-key menu, so a
+# detached Run stalls on it until the hard timeout unless it is reported.
+TRUST_PATTERNS = [
+    r"Do you trust the contents of this project\?",
+    r"Yes, I trust this folder",
+    r"requires permission to read, edit, and execute files here",
+]
 MAX_SOURCE_CHARS = 20_000
 
 PROMPT_REGEXES = [re.compile(pattern) for pattern in APPROVAL_PATTERNS]
 AUTH_REGEXES = [re.compile(pattern, re.IGNORECASE) for pattern in AUTH_PATTERNS]
+TRUST_REGEXES = [re.compile(pattern, re.IGNORECASE) for pattern in TRUST_PATTERNS]
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 SourceName = Literal["transcript", "terminal_log", "live_pane"]
 
@@ -235,6 +244,28 @@ def _candidate_from_text(source: SourceName, text: str) -> PromptCandidate | Non
             prompt=match.group(0),
             text_fingerprint=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             reason="auth_required",
+            suggested_inputs=(),
+        )
+    # Pattern order, not match length, decides which line is reported, so the
+    # caller sees the question itself rather than whichever fragment happens to
+    # be longest.
+    trust_match = next(
+        (
+            found
+            for regex in TRUST_REGEXES
+            if (found := regex.search(text)) is not None
+        ),
+        None,
+    )
+    if trust_match is not None:
+        # Deliberately no suggested input: trusting a workspace is the
+        # operator's decision, not one the bridge should nudge a caller into
+        # answering blind.
+        return PromptCandidate(
+            source=source,
+            prompt=trust_match.group(0),
+            text_fingerprint=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            reason="workspace_trust_required",
             suggested_inputs=(),
         )
     matches: list[re.Match[str]] = []
