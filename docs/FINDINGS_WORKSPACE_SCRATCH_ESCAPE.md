@@ -91,7 +91,7 @@ conditional on task success.
   {
     "status": "completed",
     "result": {
-      "preview": "### Summary of Changes\n\n1. **Created Script**: Implemented `sieve_of_eratosthenes` in [primes.py](file:///Users/jsonscouser/.gemini/antigravity-cli/scratch/primes.py) ... written to [primes.txt](file:///Users/jsonscouser/.gemini/antigravity-cli/scratch/primes.txt).\n2. **Execution & Verification**: Executed `python3 primes.py` and confirmed ... \n\n### Contents of `primes.txt`\n\n```text\n2\n3\n5\n7\n11\n13\n17\n19\n23\n29\n31\n37\n41\n43\n47\n```\n\nTASK_B_COMPLETE",
+      "preview": "### Summary of Changes\n\n1. **Created Script**: Implemented `sieve_of_eratosthenes` in [primes.py](file:///Users/<username>/.gemini/antigravity-cli/scratch/primes.py) ... written to [primes.txt](file:///Users/<username>/.gemini/antigravity-cli/scratch/primes.txt).\n2. **Execution & Verification**: Executed `python3 primes.py` and confirmed ... \n\n### Contents of `primes.txt`\n\n```text\n2\n3\n5\n7\n11\n13\n17\n19\n23\n29\n31\n37\n41\n43\n47\n```\n\nTASK_B_COMPLETE",
       "artifacts": [
         {"path": "primes.txt", "artifact_path": ".../agy_test/task_b/primes.txt", "exists": false},
         {"path": "summary.md", "artifact_path": ".../agy_test/task_b/summary.md", "exists": false}
@@ -134,7 +134,7 @@ This is corroborated directly in Run B's own `agy.log`:
 
 ```
 server.go:270 Creating CLI server backend: product=antigravity
-  workspaceDirs=[.../agy_test/task_b] appDataDir=/Users/jsonscouser/.gemini/antigravity-cli
+  workspaceDirs=[.../agy_test/task_b] appDataDir=/Users/<username>/.gemini/antigravity-cli
   cascadeManager=true codeAssist=true
 ```
 
