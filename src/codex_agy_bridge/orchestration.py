@@ -129,6 +129,8 @@ def create_run(
     goal_id: str | None = None,
     target_name: str | None = None,
     expected_file: str | None = None,
+    stale_timeout_seconds: int = 300,
+    stale_action: str = "notify",
 ) -> RunState:
     """Start a new asynchronous Antigravity conversation or reuse duplicate.
 
@@ -164,6 +166,8 @@ def create_run(
         goal_id=goal_id,
         target_name=target_name,
         expected_file=expected_file,
+        stale_timeout_seconds=stale_timeout_seconds,
+        stale_action=stale_action,
     )
 
 

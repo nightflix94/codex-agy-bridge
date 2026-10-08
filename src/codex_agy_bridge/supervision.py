@@ -26,6 +26,7 @@ from codex_agy_bridge.run_completion import (
     CompletionOutcome,
     marker_is_echoed_task_prompt,
 )
+from codex_agy_bridge.runtime_activity import RuntimeActivityMonitor
 from codex_agy_bridge.state import RunState
 from codex_agy_bridge.transcript import TranscriptHarvester, planner_response
 
@@ -73,10 +74,28 @@ class RunSupervisor:
         self.latest_response_step_index = -1
         self.latest_transcript_step_index = -1
         self.transcript_advanced_at = time.monotonic()
+        self.last_activity_at = self.transcript_advanced_at
+        self.last_activity_sources: tuple[str, ...] = ("run_started",)
         self.progress_stall_seconds = float(
             os.environ.get("AGY_BRIDGE_TRANSCRIPT_IDLE_SECONDS", "90")
         )
         self.next_progress_stall_event_at: float | None = None
+        self.stale_timeout_seconds = float(
+            int(self.state.get("stale_timeout_seconds", 300))
+        )
+        configured_stale_action = str(self.state.get("stale_action", "notify"))
+        self.stale_action = (
+            configured_stale_action
+            if configured_stale_action in {"notify", "cancel", "ignore"}
+            else "notify"
+        )
+        self.stale_event_emitted = False
+        self.activity_monitor = RuntimeActivityMonitor(
+            self.directory,
+            expected_file=self.state.get("expected_file"),
+            root_pid=self._agy_pid,
+            clock=lambda: time.monotonic(),
+        )
         self.completion_idle_seconds = float(
             os.environ.get("AGY_BRIDGE_COMPLETION_IDLE_SECONDS", "2")
         )
@@ -291,11 +310,22 @@ class RunSupervisor:
                 return 0
             self._observe_conversation()
             self._observe_correlation()
+            self._observe_runtime_activity()
             stall_error = self._observe_progress_stall()
             if stall_error is not None:
                 self._stop(reason="progress_stalled")
                 self._finish(status="failed", error=stall_error)
                 return 1
+            if self._observe_stale_confirmation():
+                self._stop(reason="stale_confirmed")
+                self._finish(
+                    status="canceled",
+                    error=(
+                        "Run canceled by stale watchdog after "
+                        f"{int(self.stale_timeout_seconds)} seconds without activity"
+                    ),
+                )
+                return 0
             self._deliver_interactive_input()
             response = self._completion_response()
             if self._completion_is_stable(response):
@@ -424,7 +454,7 @@ class RunSupervisor:
             if latest_step > self.latest_transcript_step_index:
                 self.latest_transcript_step_index = latest_step
                 self.transcript_advanced_at = time.monotonic()
-                self.next_progress_stall_event_at = None
+                self._record_activity("transcript")
             if records and self.session:
                 runtime.append_terminal_progress(
                     records,
@@ -608,13 +638,10 @@ class RunSupervisor:
         )
 
     def _observe_progress_stall(self) -> str | None:
-        if (
-            self.latest_transcript_step_index < 0
-            or self.progress_stall_seconds <= 0
-        ):
+        if self.progress_stall_seconds <= 0 or self._watchdog_paused():
             return None
         now = time.monotonic()
-        idle_seconds = int(now - self.transcript_advanced_at)
+        idle_seconds = int(now - self.last_activity_at)
         if idle_seconds < self.progress_stall_seconds:
             return None
         if (
@@ -640,12 +667,75 @@ class RunSupervisor:
                     "latest_transcript_step": self.latest_transcript_step_index,
                     "idle_seconds": idle_seconds,
                     "stalled_for_seconds": idle_seconds,
+                    "last_activity_sources": list(self.last_activity_sources),
+                    **self.activity_monitor.evidence,
                     "suggested_next_tool": next_call["tool"],
                     "suggested_next_arguments": next_call["arguments"],
                 },
             },
         )
         return self._terminal_failure_after_stall()
+
+    def _agy_pid(self) -> int | None:
+        value = self.state.get("agy_pid")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def _record_activity(self, *sources: str) -> None:
+        self.last_activity_at = time.monotonic()
+        self.last_activity_sources = tuple(sources)
+        self.next_progress_stall_event_at = None
+        self.stale_event_emitted = False
+
+    def _observe_runtime_activity(self) -> None:
+        sample = self.activity_monitor.sample()
+        if sample.active:
+            self._record_activity(*sample.sources)
+
+    def _watchdog_paused(self) -> bool:
+        """Interactive conversations waiting for the caller are intentionally idle."""
+        return (
+            self.state.get("execution_mode") == "interactive"
+            and self.latest_response_step_index >= 0
+            and not self.state.get("interactive_prompt_in_flight", False)
+        )
+
+    def _observe_stale_confirmation(self) -> bool:
+        """Emit one stale decision per idle episode and request cancellation."""
+        if (
+            self.stale_action == "ignore"
+            or self.stale_timeout_seconds <= 0
+            or self.stale_event_emitted
+            or self._watchdog_paused()
+        ):
+            return False
+        now = time.monotonic()
+        idle_seconds = int(now - self.last_activity_at)
+        if idle_seconds < self.stale_timeout_seconds:
+            return False
+        self.stale_event_emitted = True
+        next_call = harness_contract.terminal_observe_call(self.run_id)
+        session_events.append_event(
+            self.directory,
+            "stale_confirmed",
+            {
+                "category": "progress",
+                "severity": "warning",
+                "source": "runner",
+                "dedupe_key": f"stale_confirmed:{self.run_id}:{idle_seconds}",
+                "observed": {
+                    "activity_state": "stale",
+                    "latest_transcript_step": self.latest_transcript_step_index,
+                    "idle_seconds": idle_seconds,
+                    "stale_timeout_seconds": int(self.stale_timeout_seconds),
+                    "stale_action": self.stale_action,
+                    "last_activity_sources": list(self.last_activity_sources),
+                    **self.activity_monitor.evidence,
+                    "suggested_next_tool": next_call["tool"],
+                    "suggested_next_arguments": next_call["arguments"],
+                },
+            },
+        )
+        return self.stale_action == "cancel"
 
     def _terminal_failure_after_stall(self) -> str | None:
         """Turn an Agy error left in a live tmux shell into a terminal failure."""
@@ -701,6 +791,7 @@ class RunSupervisor:
                 self.run_id,
                 interactive_prompt_in_flight=False,
             )
+            self.state["interactive_prompt_in_flight"] = False
         text = interactive_input.peek(self.directory)
         if text is None:
             return
@@ -726,6 +817,8 @@ class RunSupervisor:
             self.run_id,
             interactive_prompt_in_flight=True,
         )
+        self.state["interactive_prompt_in_flight"] = True
+        self._record_activity("mcp_input")
         interactive_input.pop(self.directory)
         self.interactive_waiting_after_step = self.latest_response_step_index
 

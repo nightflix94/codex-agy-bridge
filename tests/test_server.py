@@ -207,6 +207,24 @@ def test_run_start_forwards_optional_expected_file(monkeypatch, tmp_path):
     assert result["expected_file"] == str(tmp_path / "primes.txt")
 
 
+def test_run_start_forwards_stale_policy(monkeypatch, tmp_path):
+    state = {"run_id": "run-1", "status": "queued"}
+
+    def create_run(**kwargs):
+        assert kwargs["stale_timeout_seconds"] == 75
+        assert kwargs["stale_action"] == "cancel"
+        return state
+
+    monkeypatch.setattr(server.orchestration, "create_run", create_run)
+
+    assert server.agy_run_start(
+        prompt="work",
+        workspace=str(tmp_path),
+        stale_timeout_seconds=75,
+        stale_action="cancel",
+    ) == state
+
+
 def test_interactive_run_rejects_expected_file(tmp_path):
     with pytest.raises(ValueError, match="expected_file.*mode='task'"):
         server.agy_run_start(

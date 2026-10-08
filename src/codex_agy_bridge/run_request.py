@@ -11,10 +11,18 @@ from typing import Protocol, cast
 
 from codex_agy_bridge import core, expected_artifact, harness_contract
 from codex_agy_bridge.exceptions import WorkspaceAccessError
-from codex_agy_bridge.state import AgentMode, ExecutionMode, ExecutionSurface, RunState
+from codex_agy_bridge.state import (
+    AgentMode,
+    ExecutionMode,
+    ExecutionSurface,
+    RunState,
+    StaleAction,
+)
 from codex_agy_bridge.task_packet import format_task_packet
 
 MAX_PROMPT_CHARS = 100_000
+DEFAULT_STALE_TIMEOUT_SECONDS = 300
+DEFAULT_STALE_ACTION: StaleAction = "notify"
 
 
 class CliValidator(Protocol):
@@ -30,6 +38,8 @@ class RunRequest:
     prompt: str
     workspace: Path
     timeout_seconds: int
+    stale_timeout_seconds: int
+    stale_action: StaleAction
     conversation_id: str | None
     dangerously_skip_permissions: bool
     model: str
@@ -66,6 +76,8 @@ class RunRequest:
         target_name: str | None,
         cli: CliValidator,
         expected_file: str | None = None,
+        stale_timeout_seconds: int = DEFAULT_STALE_TIMEOUT_SECONDS,
+        stale_action: str = DEFAULT_STALE_ACTION,
     ) -> RunRequest:
         if "\x00" in prompt:
             raise ValueError("prompt must not contain NUL bytes")
@@ -89,6 +101,10 @@ class RunRequest:
             raise WorkspaceAccessError(f"workspace is not a directory: {root}")
         if timeout_seconds < 10 or timeout_seconds > 86400:
             raise ValueError("timeout_seconds must be between 10 and 86400")
+        if stale_timeout_seconds < 30 or stale_timeout_seconds > 86400:
+            raise ValueError("stale_timeout_seconds must be between 30 and 86400")
+        if stale_action not in {"notify", "cancel", "ignore"}:
+            raise ValueError("stale_action must be notify, cancel, or ignore")
         if execution_mode not in {"print", "interactive"}:
             raise ValueError("execution_mode must be print or interactive")
         if agent_mode not in {"task", "conversation"}:
@@ -128,6 +144,7 @@ class RunRequest:
         mode = cast(ExecutionMode, execution_mode)
         normalized_agent_mode = cast(AgentMode, agent_mode)
         normalized_execution_surface = cast(ExecutionSurface, execution_surface)
+        normalized_stale_action = cast(StaleAction, stale_action)
         request_key = _request_key(
             prompt=prompt,
             workspace=str(root),
@@ -144,11 +161,15 @@ class RunRequest:
             goal_id=goal_id,
             target_name=target_name,
             expected_file=normalized_expected_file,
+            stale_timeout_seconds=stale_timeout_seconds,
+            stale_action=normalized_stale_action,
         )
         return cls(
             prompt=prompt,
             workspace=root,
             timeout_seconds=timeout_seconds,
+            stale_timeout_seconds=stale_timeout_seconds,
+            stale_action=normalized_stale_action,
             conversation_id=conversation_id,
             dangerously_skip_permissions=True,
             model=effective_model,
@@ -203,6 +224,8 @@ class RunRequest:
             "prompt_preview": self.prompt[:240],
             "completion_marker": marker,
             "timeout_seconds": self.timeout_seconds,
+            "stale_timeout_seconds": self.stale_timeout_seconds,
+            "stale_action": self.stale_action,
             "requested_conversation_id": self.conversation_id,
             "previous_conversation_id": previous_conversation_id,
             "conversation_id": self.conversation_id,
@@ -291,6 +314,8 @@ def _request_key(
     goal_id: str | None,
     target_name: str | None,
     expected_file: str | None = None,
+    stale_timeout_seconds: int = DEFAULT_STALE_TIMEOUT_SECONDS,
+    stale_action: str = DEFAULT_STALE_ACTION,
 ) -> str:
     payload = {
         "prompt": prompt.rstrip(),
@@ -309,5 +334,14 @@ def _request_key(
         "target_name": target_name,
         "expected_file": expected_file,
     }
+    # Keep the historic default request identity so active runs reserved by an
+    # older bridge are still deduplicated after an upgrade. Non-default policy
+    # remains identity-bearing because it changes supervisor behavior.
+    if (
+        stale_timeout_seconds != DEFAULT_STALE_TIMEOUT_SECONDS
+        or stale_action != DEFAULT_STALE_ACTION
+    ):
+        payload["stale_timeout_seconds"] = stale_timeout_seconds
+        payload["stale_action"] = stale_action
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

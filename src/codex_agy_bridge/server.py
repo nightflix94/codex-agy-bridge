@@ -72,7 +72,9 @@ mcp = StrictFastMCP(
         "state, or raw terminal evidence. When a run is possibly_stalled, "
         "inspect the live pane and terminal tail for agent error markers, "
         "feedback prompts, and completion markers; a live tmux session alone "
-        "does not prove the Agy agent is alive. agy_run_input sends text only when "
+        "does not prove the Agy agent is alive. Run starts can emit a later "
+        "stale_confirmed event or opt into owned-process cancellation with "
+        "stale_action='cancel'. agy_run_input sends text only when "
         "optional event or transcript preconditions still match; stale writes "
         "are rejected with fresh context. agy_run_result reads final result "
         "metadata or bounded chunks. agy_start_with_expected_file starts a task "
@@ -107,6 +109,8 @@ def create_run(
     goal_id: str | None = None,
     target_name: str | None = None,
     expected_file: str | None = None,
+    stale_timeout_seconds: int = 300,
+    stale_action: str = "notify",
 ) -> dict[str, Any]:
     """Compatibility interface for callers predating the orchestration module."""
     return cast(
@@ -123,6 +127,8 @@ def create_run(
             goal_id=goal_id,
             target_name=target_name,
             expected_file=expected_file,
+            stale_timeout_seconds=stale_timeout_seconds,
+            stale_action=stale_action,
         ),
     )
 
@@ -139,6 +145,8 @@ def agy_run_start(
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
     expected_file: str | None = None,
+    stale_timeout_seconds: int = 300,
+    stale_action: str = "notify",
 ) -> dict[str, Any]:
     """Start or continue one foreground Antigravity Run.
 
@@ -150,6 +158,9 @@ def agy_run_start(
     dedicated tool for reviews and other artifact-producing tasks.
     dangerously_skip_permissions must be true; the bridge always forwards
     --dangerously-skip-permissions to Antigravity.
+    stale_action controls what happens after stale_timeout_seconds without
+    transcript, terminal, artifact, process-tree, or CPU activity: notify (the
+    default), cancel, or ignore.
     """
     if mode not in {"task", "interactive"}:
         raise ValueError("mode must be 'task' or 'interactive'")
@@ -165,6 +176,8 @@ def agy_run_start(
         "model": model,
         "sandbox": sandbox,
         "additional_directories": additional_directories,
+        "stale_timeout_seconds": stale_timeout_seconds,
+        "stale_action": stale_action,
     }
     if mode == "interactive":
         kwargs.update(
@@ -192,6 +205,8 @@ def agy_start_with_expected_file(
     model: str | None = DEFAULT_MODEL,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
+    stale_timeout_seconds: int = 300,
+    stale_action: str = "notify",
 ) -> dict[str, Any]:
     """Start one task Run that cannot complete until expected_file is non-empty."""
     try:
@@ -208,6 +223,8 @@ def agy_start_with_expected_file(
                     sandbox=sandbox,
                     additional_directories=additional_directories,
                     expected_file=expected_file,
+                    stale_timeout_seconds=stale_timeout_seconds,
+                    stale_action=stale_action,
                 ),
             )
         )

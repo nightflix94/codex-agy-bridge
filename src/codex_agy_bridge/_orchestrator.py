@@ -414,6 +414,8 @@ class RunnerOrchestrator:
         goal_id: str | None = None,
         target_name: str | None = None,
         expected_file: str | None = None,
+        stale_timeout_seconds: int = 300,
+        stale_action: str = "notify",
         _goal_max_parallel: int | None = None,
     ) -> RunState:
         """Start a new asynchronous Antigravity conversation or reuse duplicate.
@@ -487,6 +489,8 @@ class RunnerOrchestrator:
             target_name=target_name,
             cli=self.cli,
             expected_file=expected_file,
+            stale_timeout_seconds=stale_timeout_seconds,
+            stale_action=stale_action,
         )
         self.maybe_run_janitor()
         from codex_agy_bridge import orchestration

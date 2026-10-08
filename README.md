@@ -96,7 +96,8 @@ executable.
 - **Trajectory-aware observability:** bounded transcript summaries and terminal
   evidence are exposed without private model reasoning.
 - **Operational hygiene:** duplicate active starts are deduplicated, process
-  groups are cancelled safely, and completed result artifacts are preserved.
+  groups are cancelled safely, completed result artifacts are preserved, and a
+  multi-signal watchdog identifies silent background runs.
 
 ## Install Details
 
@@ -202,7 +203,7 @@ vision, see [docs/MCP_VISION.md](docs/MCP_VISION.md).
 
 | Tool | Purpose |
 | --- | --- |
-| `agy_run_start` | Start, continue, or open a run; task mode accepts an optional expected-file gate |
+| `agy_run_start` | Start, continue, or open a run; accepts an expected-file gate and stale-run policy |
 | `agy_run_wait` | Short-poll until selected runs emit sparse wake events |
 | `agy_run_observe` | Read full, status, transcript, or raw terminal views |
 | `agy_run_input` | Send input with optional event/transcript preconditions |
@@ -224,6 +225,21 @@ single run. Supported wait conditions are `any_attention`, `any_terminal`,
 `all_terminal`, `any_event`, and aliases `attention`, `terminal`, `finished`,
 `finish`, `complete`, `completed`, `result`, `all_finished`, `all_complete`, and
 `all_completed`.
+
+`agy_run_start` and `agy_start_with_expected_file` accept
+`stale_timeout_seconds` (default `300`, minimum `30`) and `stale_action`:
+
+- `notify` (default) emits a durable `stale_confirmed` attention event and keeps
+  the run alive.
+- `cancel` emits the event, then terminates only the run's owned tmux/process
+  tree and records the run as canceled.
+- `ignore` disables stale confirmation and automatic action for that run.
+
+The timer resets on transcript, terminal/log, expected-artifact, process-tree,
+or CPU activity, and it is paused while an interactive conversation is waiting
+for user input. `progress_stalled` remains an earlier warning. Automatic
+cancellation is opt-in because a legitimate long-running sleeping command can
+be indistinguishable from a frozen one.
 
 Use `agy_goal` when the harness should split work into named targets with a
 shared objective and bounded parallelism.

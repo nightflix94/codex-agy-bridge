@@ -425,3 +425,53 @@ def test_additional_directory_order_is_canonical(tmp_path):
 
     assert request_a.additional_directories == request_b.additional_directories
     assert request_a.request_key == request_b.request_key
+
+
+def test_stale_policy_is_validated_persisted_and_part_of_request_identity(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    common = {
+        "prompt": "work",
+        "workspace": str(workspace),
+        "timeout_seconds": 900,
+        "conversation_id": None,
+        "dangerously_skip_permissions": True,
+        "model": None,
+        "default_model": "default",
+        "sandbox": False,
+        "additional_directories": [],
+        "execution_mode": "print",
+        "agent_mode": "task",
+        "execution_surface": "foreground",
+        "human_attachable": True,
+        "goal_id": None,
+        "target_name": None,
+        "cli": FakeCli(),
+    }
+    notify = RunRequest.prepare(
+        **common,
+        stale_timeout_seconds=45,
+        stale_action="notify",
+    )
+    cancel = RunRequest.prepare(
+        **common,
+        stale_timeout_seconds=45,
+        stale_action="cancel",
+    )
+
+    state = cancel.initial_state(
+        run_id="run-1",
+        now="2026-10-08T00:00:00+00:00",
+        previous_conversation_id=None,
+        session_label="run-1",
+        tmux_session="agy-run-1",
+        completion_marker="DONE",
+    )
+    assert state["stale_timeout_seconds"] == 45
+    assert state["stale_action"] == "cancel"
+    assert notify.request_key != cancel.request_key
+
+    with pytest.raises(ValueError, match="stale_action"):
+        RunRequest.prepare(**common, stale_action="kill")
+    with pytest.raises(ValueError, match="stale_timeout_seconds"):
+        RunRequest.prepare(**common, stale_timeout_seconds=29)

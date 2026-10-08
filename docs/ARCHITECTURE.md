@@ -108,26 +108,35 @@ reservation append is atomic; concurrent callers cannot both consume the same
 observed cursor. Guarded input also fails closed when either expected cursor
 cannot be read back.
 
-#### Progress-Stall Wakeup
+#### Progress-Stall and Stale-Run Wakeup
 
 ```mermaid
 sequenceDiagram
     participant S as RunSupervisor
-    participant H as TranscriptHarvester
+    participant H as Activity monitor
     participant E as session-events.jsonl
     participant C as Codex
 
-    S->>H: poll appended transcript bytes
-    H-->>S: latest transcript step N
-    S->>S: no newer step for AGY_BRIDGE_TRANSCRIPT_IDLE_SECONDS
-    S->>E: append progress_stalled for step N
+    S->>H: sample transcript, logs, artifact, process tree, and CPU
+    H-->>S: latest activity evidence
+    S->>S: no activity for AGY_BRIDGE_TRANSCRIPT_IDLE_SECONDS
+    S->>E: append progress_stalled with latest step and evidence
+    S->>S: no activity for stale_timeout_seconds
+    S->>E: append stale_confirmed (notify/cancel policies)
+    opt stale_action is cancel
+        S->>S: terminate the owned tmux/process tree and mark canceled
+    end
     C->>E: agy_run_wait(run_ids, condition="any_attention")
     E-->>C: progress_stalled warning
     C->>C: inspect transcript and terminal before acting
 ```
 
-`progress_stalled` is a wake-up hint, not a stuck verdict. Codex should inspect
-`agy_run_observe(view="full")` or `view="terminal"` before sending input.
+`progress_stalled` is an early wake-up hint. `stale_confirmed` is a later,
+multi-signal decision whose default policy still only notifies. A caller can opt
+into safe owned-process cancellation per run with `stale_action="cancel"`.
+Interactive sessions waiting for the caller are excluded from the watchdog.
+Codex should inspect `agy_run_observe(view="full")` or `view="terminal"` before
+sending input.
 
 Goals are bridge-owned MCP scheduling records. They coordinate independent
 Antigravity Runs; they are not an Antigravity primitive and do not provide

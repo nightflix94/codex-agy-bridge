@@ -19,6 +19,7 @@ RunStatus = Literal[
 ExecutionMode = Literal["print", "interactive"]
 AgentMode = Literal["task", "conversation"]
 ExecutionSurface = Literal["foreground", "headless"]
+StaleAction = Literal["notify", "cancel", "ignore"]
 
 ACTIVE_STATUSES: set[RunStatus] = {
     "queued",
@@ -42,6 +43,8 @@ class RunState(TypedDict, total=False):
     prompt_preview: str
     completion_marker: str
     timeout_seconds: int
+    stale_timeout_seconds: int
+    stale_action: StaleAction
     requested_conversation_id: str | None
     previous_conversation_id: str | None
     conversation_id: str | None

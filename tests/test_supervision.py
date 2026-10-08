@@ -477,6 +477,94 @@ def test_supervisor_emits_progress_stalled_after_transcript_idle(
     }
 
 
+def test_supervisor_detects_pre_transcript_stall(monkeypatch, tmp_path):
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 900,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    clock = FakeClock(100.0)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+    supervisor = RunSupervisor("run-1")
+    supervisor.progress_stall_seconds = 30.0
+
+    clock.advance(31.0)
+    supervisor._observe_progress_stall()
+
+    event = session_events.read_events(tmp_path)[-1]
+    assert event["kind"] == "progress_stalled"
+    assert event["observed"]["latest_transcript_step"] == -1
+    assert event["observed"]["idle_seconds"] == 31
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_cancel", "expected_events"),
+    [("notify", False, 1), ("cancel", True, 1), ("ignore", False, 0)],
+)
+def test_supervisor_applies_stale_policy(
+    monkeypatch, tmp_path, action, expected_cancel, expected_events
+):
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 900,
+        "stale_timeout_seconds": 30,
+        "stale_action": action,
+        "completion_marker": "DONE_MARKER",
+        "prompt": "do work",
+    }
+    clock = FakeClock(100.0)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+    supervisor = RunSupervisor("run-1")
+
+    clock.advance(31.0)
+    assert supervisor._observe_stale_confirmation() is expected_cancel
+    assert not supervisor._observe_stale_confirmation()
+
+    events = [
+        event
+        for event in session_events.read_events(tmp_path)
+        if event["kind"] == "stale_confirmed"
+    ]
+    assert len(events) == expected_events
+    if events:
+        assert events[0]["observed"]["stale_action"] == action
+        assert events[0]["observed"]["latest_transcript_step"] == -1
+
+
+def test_interactive_waiting_for_user_pauses_stale_watchdog(monkeypatch, tmp_path):
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 900,
+        "stale_timeout_seconds": 30,
+        "stale_action": "cancel",
+        "execution_mode": "interactive",
+        "interactive_prompt_in_flight": False,
+        "completion_marker": "",
+        "prompt": "talk",
+    }
+    clock = FakeClock(100.0)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr("codex_agy_bridge.supervision.time.monotonic", clock)
+    supervisor = RunSupervisor("run-1")
+    supervisor.latest_response_step_index = 4
+
+    clock.advance(300.0)
+
+    assert not supervisor._observe_stale_confirmation()
+    assert session_events.read_events(tmp_path) == []
+
+
+
+
 def test_supervisor_classifies_nonzero_cli_exit(monkeypatch, tmp_path):
     state = {
         "run_id": "run-1",
