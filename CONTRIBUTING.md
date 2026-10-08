@@ -12,6 +12,7 @@ uv sync --extra dev
 
 ```bash
 uv run ruff check .
+uv run mypy src
 uv run pytest
 uv build
 ```

@@ -37,7 +37,7 @@ from codex_agy_bridge.goal_scheduler import (
     GoalTargetLaunch,
 )
 from codex_agy_bridge.process import LocalProcessManager, ProcessManager
-from codex_agy_bridge.run_cancellation import RunCanceler
+from codex_agy_bridge.run_cancellation import RunCanceler, runner_process_alive
 from codex_agy_bridge.run_observation import RunObservation, WaitCondition
 from codex_agy_bridge.run_request import RunRequest
 from codex_agy_bridge.state import (
@@ -640,13 +640,13 @@ class RunnerOrchestrator:
         """
         state = self.load_state(run_id)
         runner_pid = state.get("runner_pid")
-        agy_pid = state.get("agy_pid")
-        runner_exited = runner_pid is not None and not self.process_manager.is_alive(
-            runner_pid
+        runner_exited = runner_pid is not None and not runner_process_alive(
+            self.process_manager,
+            state,
         )
-        no_recorded_process_is_alive = runner_pid is None and (
-            agy_pid is None or not self.process_manager.is_alive(agy_pid)
-        )
+        # The detached runner is the authoritative supervisor. A child PID by
+        # itself cannot identify this Run safely after PID reuse.
+        no_recorded_process_is_alive = runner_pid is None
         if (
             state["status"] in ACTIVE_STATUSES
             and not (

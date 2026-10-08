@@ -35,5 +35,6 @@ jobs:
           chmod +x "$RUNNER_TEMP/agy"
           echo "AGY_CMD=$RUNNER_TEMP/agy" >> "$GITHUB_ENV"
       - run: uv run ruff check .
+      - run: uv run mypy src
       - run: uv run pytest
       - run: uv build

@@ -129,40 +129,73 @@ def append_event(
     payload: dict[str, Any] | None = None,
 ) -> SessionEvent:
     """Append one durable run event and advance the lightweight notify marker."""
+    _validate_kind(kind)
+    core.ensure_private_directory(run_dir)
+    with FileLock(str(run_dir / EVENTS_LOCK), timeout=10, mode=0o600):
+        return _append_event_locked(run_dir, kind, payload)
+
+
+def append_event_if_latest(
+    run_dir: Path,
+    expected_event_key: str,
+    kind: str,
+    payload: dict[str, Any] | None = None,
+) -> tuple[SessionEvent | None, str | None]:
+    """Append only when ``expected_event_key`` is still the event-log head.
+
+    The comparison and append share the event lock, making this the durable
+    compare-and-set primitive used by guarded terminal input.
+    """
+    _validate_kind(kind)
+    core.ensure_private_directory(run_dir)
+    with FileLock(str(run_dir / EVENTS_LOCK), timeout=10, mode=0o600):
+        latest = latest_event_key(run_dir)
+        if latest != expected_event_key:
+            return None, latest
+        return _append_event_locked(run_dir, kind, payload), latest
+
+
+def _validate_kind(kind: str) -> None:
     if not kind:
         raise ValueError("event kind must be non-empty")
     if kind not in EVENT_KINDS:
         raise ValueError(f"unsupported event kind: {kind}")
+
+
+def _append_event_locked(
+    run_dir: Path,
+    kind: str,
+    payload: dict[str, Any] | None,
+) -> SessionEvent:
+    """Append an event while the caller holds ``EVENTS_LOCK``."""
     payload = dict(payload or {})
     observed = dict(payload.pop("observed", {}))
     observed.setdefault("activity_state", EVENT_ACTIVITY_STATES[kind])
-    core.ensure_private_directory(run_dir)
-    with FileLock(str(run_dir / EVENTS_LOCK), timeout=10, mode=0o600):
-        run_seq = _next_run_seq(run_dir)
-        event = cast(
-            SessionEvent,
-            {
-                "event_id": f"{run_dir.name}:{run_seq}",
-                "run_id": run_dir.name,
-                "run_seq": run_seq,
-                "kind": kind,
-                "category": payload.pop("category", EVENT_CATEGORIES[kind]),
-                "severity": payload.pop(
-                    "severity",
-                    "error" if kind in {"run_failed", "mcp_input_failed"} else "info",
-                ),
-                "source": payload.pop("source", "bridge"),
-                "dedupe_key": payload.pop("dedupe_key", f"{kind}:{run_dir.name}"),
-                "created_at": core.utc_now(),
-                "observed": observed,
-                **payload,
-            },
-        )
-        line = json.dumps(event, ensure_ascii=False, sort_keys=True)
-        with core.open_private_binary_append(run_dir / EVENTS_FILE) as handle:
-            handle.write((line + "\n").encode("utf-8"))
-        _atomic_write_text(run_dir / NOTIFY_SEQ, run_seq + "\n")
-        return event
+    run_seq = _next_run_seq(run_dir)
+    event = cast(
+        SessionEvent,
+        {
+            "event_id": f"{run_dir.name}:{run_seq}",
+            "run_id": run_dir.name,
+            "run_seq": run_seq,
+            "kind": kind,
+            "category": payload.pop("category", EVENT_CATEGORIES[kind]),
+            "severity": payload.pop(
+                "severity",
+                "error" if kind in {"run_failed", "mcp_input_failed"} else "info",
+            ),
+            "source": payload.pop("source", "bridge"),
+            "dedupe_key": payload.pop("dedupe_key", f"{kind}:{run_dir.name}"),
+            "created_at": core.utc_now(),
+            "observed": observed,
+            **payload,
+        },
+    )
+    line = json.dumps(event, ensure_ascii=False, sort_keys=True)
+    with core.open_private_binary_append(run_dir / EVENTS_FILE) as handle:
+        handle.write((line + "\n").encode("utf-8"))
+    _atomic_write_text(run_dir / NOTIFY_SEQ, run_seq + "\n")
+    return event
 
 
 def latest_event_id(run_dir: Path) -> str | None:

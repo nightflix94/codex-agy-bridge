@@ -7,6 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from filelock import FileLock
+
 from codex_agy_bridge import (
     core,
     interactive_input,
@@ -18,6 +20,7 @@ from codex_agy_bridge.execution import ExecutionSession
 from codex_agy_bridge.state import ACTIVE_STATUSES, RunState
 
 INPUT_MAX_BYTES = 65_536
+INPUT_DELIVERY_LOCK = "input-delivery.lock"
 
 
 def deliver(
@@ -46,6 +49,38 @@ def deliver(
             delivery_id=delivery_id,
             input_bytes=input_bytes,
         )
+    core.ensure_private_directory(run_dir)
+    with FileLock(str(run_dir / INPUT_DELIVERY_LOCK), timeout=10, mode=0o600):
+        if load_state is not None:
+            state = load_state(state["run_id"])
+        return _deliver_locked(
+            state,
+            run_dir,
+            text=text,
+            enter=enter,
+            delivery_id=delivery_id,
+            expected_event_key=expected_event_key,
+            expected_transcript_step=expected_transcript_step,
+            state_root=state_root,
+            load_state=load_state,
+            get_session=get_session,
+        )
+
+
+def _deliver_locked(
+    state: RunState,
+    run_dir: Path,
+    *,
+    text: str,
+    enter: bool,
+    delivery_id: str,
+    expected_event_key: str | None,
+    expected_transcript_step: int | None,
+    state_root: Path | None,
+    load_state: Callable[[str], RunState] | None,
+    get_session: Callable[[RunState], ExecutionSession],
+) -> dict[str, Any]:
+    """Validate, reserve, and deliver one input while holding the input lock."""
     delivery = (
         "foreground_mcp_submit" if enter and bool(text) else "foreground_mcp_keystrokes"
     )
@@ -59,27 +94,65 @@ def deliver(
         load_state=load_state,
     )
     if stale is not None:
-        return {
-            "run_id": state["run_id"],
-            "tmux_session": state.get("tmux_session"),
-            "sent": False,
-            "delivery_id": delivery_id,
-            "delivery_state": "rejected",
-            "error_kind": "stale_observation",
-            "error": stale["reason"],
-            "retry_with": "agy_run_observe",
-            "execution_mode": state.get("execution_mode", "print"),
-            "agent_mode": state.get("agent_mode", "task"),
-            "execution_surface": state.get("execution_surface", "headless"),
-            "human_attachable": state.get("human_attachable", False),
-            **stale,
-        }
-    _record_submitted(
-        run_dir,
+        return _rejected_stale(state, delivery_id=delivery_id, stale=stale)
+    submitted_payload = _submitted_payload(
         delivery_id=delivery_id,
         delivery=delivery,
         enter=enter,
     )
+    if expected_event_key is not None:
+        submitted, latest_event_key = session_events.append_event_if_latest(
+            run_dir,
+            expected_event_key,
+            "mcp_input_submitted",
+            submitted_payload,
+        )
+        if submitted is None:
+            stale = _stale_input_precondition(
+                state,
+                expected_event_key=expected_event_key,
+                expected_transcript_step=expected_transcript_step,
+                state_root=state_root,
+                load_state=load_state,
+            ) or {
+                "reason": "run event cursor advanced while input was reserved",
+                "expected_event_key": expected_event_key,
+                "latest_event_key": latest_event_key,
+                "expected_transcript_step": expected_transcript_step,
+                "latest_transcript_step": None,
+                "latest_step": _latest_step_with_content(state),
+            }
+            return _rejected_stale(state, delivery_id=delivery_id, stale=stale)
+    else:
+        session_events.append_event(
+            run_dir,
+            "mcp_input_submitted",
+            submitted_payload,
+        )
+
+    # The event reservation is the compare-and-set linearization point. Check
+    # the independently written transcript once more before touching the pane.
+    transcript_stale = _stale_input_precondition(
+        state,
+        expected_event_key=None,
+        expected_transcript_step=expected_transcript_step,
+        state_root=state_root,
+        load_state=load_state,
+    )
+    if transcript_stale is not None:
+        _record_failed(
+            run_dir,
+            delivery_id=delivery_id,
+            delivery=delivery,
+            enter=enter,
+            error=transcript_stale["reason"],
+            error_kind="stale_observation",
+        )
+        return _rejected_stale(
+            state,
+            delivery_id=delivery_id,
+            stale=transcript_stale,
+        )
     if not state.get("tmux_session"):
         error = "run does not have an active tmux session"
         _record_failed(
@@ -214,13 +287,13 @@ def _stale_input_precondition(
     latest_event_key = snapshot["latest_event_key"]
     latest_transcript_step = snapshot["latest_transcript_step"]
     latest_step = _latest_step_with_content(state)
-    if (
-        expected_transcript_step is not None
-        and isinstance(latest_transcript_step, int)
-        and latest_transcript_step > expected_transcript_step
-    ):
+    transcript_cursor_matches = (
+        isinstance(latest_transcript_step, int)
+        and latest_transcript_step == expected_transcript_step
+    ) or (expected_transcript_step == -1 and latest_transcript_step is None)
+    if expected_transcript_step is not None and not transcript_cursor_matches:
         return {
-            "reason": "transcript advanced after caller observed the run",
+            "reason": "transcript cursor cannot be verified or has changed",
             "expected_event_key": expected_event_key,
             "latest_event_key": latest_event_key,
             "expected_transcript_step": expected_transcript_step,
@@ -228,13 +301,9 @@ def _stale_input_precondition(
             "latest_step": latest_step,
             "snapshot": snapshot,
         }
-    if (
-        expected_event_key is not None
-        and latest_event_key is not None
-        and latest_event_key != expected_event_key
-    ):
+    if expected_event_key is not None and latest_event_key != expected_event_key:
         return {
-            "reason": "run event cursor advanced after caller observed the run",
+            "reason": "run event cursor cannot be verified or has changed",
             "expected_event_key": expected_event_key,
             "latest_event_key": latest_event_key,
             "expected_transcript_step": expected_transcript_step,
@@ -262,29 +331,47 @@ def _latest_step_with_content(state: RunState) -> dict[str, Any] | None:
     return steps[-1] if steps else latest
 
 
-def _record_submitted(
-    run_dir: Path,
+def _submitted_payload(
     *,
     delivery_id: str,
     delivery: str,
     enter: bool,
-) -> None:
-    session_events.append_event(
-        run_dir,
-        "mcp_input_submitted",
-        {
-            "category": "mcp_input",
-            "severity": "info",
-            "source": "mcp",
-            "observed": {
-                "activity_state": "working",
-                "delivery_id": delivery_id,
-                "delivery_state": "submitted",
-                "delivery": delivery,
-                "enter": enter,
-            },
+) -> dict[str, Any]:
+    return {
+        "category": "mcp_input",
+        "severity": "info",
+        "source": "mcp",
+        "observed": {
+            "activity_state": "working",
+            "delivery_id": delivery_id,
+            "delivery_state": "submitted",
+            "delivery": delivery,
+            "enter": enter,
         },
-    )
+    }
+
+
+def _rejected_stale(
+    state: RunState,
+    *,
+    delivery_id: str,
+    stale: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "run_id": state["run_id"],
+        "tmux_session": state.get("tmux_session"),
+        "sent": False,
+        "delivery_id": delivery_id,
+        "delivery_state": "rejected",
+        "error_kind": "stale_observation",
+        "error": stale["reason"],
+        "retry_with": "agy_run_observe",
+        "execution_mode": state.get("execution_mode", "print"),
+        "agent_mode": state.get("agent_mode", "task"),
+        "execution_surface": state.get("execution_surface", "headless"),
+        "human_attachable": state.get("human_attachable", False),
+        **stale,
+    }
 
 
 def _record_failed(

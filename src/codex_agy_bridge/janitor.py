@@ -12,6 +12,7 @@ from typing import Any
 
 from codex_agy_bridge.execution import TmuxSession
 from codex_agy_bridge.process import ProcessManager
+from codex_agy_bridge.run_cancellation import runner_process_alive
 from codex_agy_bridge.state import (
     ACTIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -111,13 +112,11 @@ class RunJanitor:
                         and age_seconds <= QUEUED_RUNNER_START_GRACE_SECONDS
                     ):
                         continue
-                    runner_alive = (
-                        self.process_manager.is_alive(runner_pid)
-                        if runner_pid
-                        else False
-                    )
+                    runner_alive = runner_process_alive(self.process_manager, state)
                     agy_alive = (
-                        self.process_manager.is_alive(agy_pid) if agy_pid else False
+                        self.process_manager.is_alive(agy_pid)
+                        if agy_pid and not self.process_manager.supports_identity
+                        else False
                     )
                     if not runner_alive and not agy_alive:
                         tmux_session = state.get("tmux_session")

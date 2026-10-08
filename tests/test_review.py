@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from codex_agy_bridge import review
 from codex_agy_bridge._orchestrator import RunnerOrchestrator
 from codex_agy_bridge.process import ProcessManager
 from codex_agy_bridge.store import MemoryRunStore
@@ -40,6 +41,25 @@ class FakeCli:
 
     def validate_model(self, model):
         pass
+
+
+def test_review_schema_rejects_untyped_array_entries():
+    errors = review.validate_artifact(
+        {
+            "schema": review.REVIEW_SCHEMA,
+            "verdict": "accepted",
+            "findings": [None, {"severity": "urgent", "message": "problem"}],
+            "blockers": [42],
+            "files_inspected": [False],
+            "commands_run": [{"command": "pytest"}],
+        }
+    )
+
+    assert "findings[0] must be an object" in errors
+    assert any("findings[1].severity" in error for error in errors)
+    assert "blockers[0] must be an object" in errors
+    assert "files_inspected[0] must be a non-empty string" in errors
+    assert "commands_run[0] must be a non-empty string" in errors
 
 
 def test_review_commit_starts_tagged_expected_file_run(tmp_path):

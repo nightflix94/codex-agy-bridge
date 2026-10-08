@@ -1593,6 +1593,135 @@ def test_send_text_rejects_stale_transcript_precondition(monkeypatch, tmp_path):
     assert result["retry_with"] == "agy_run_observe"
 
 
+def test_send_text_guard_fails_closed_when_event_cursor_is_unavailable(
+    monkeypatch,
+    tmp_path,
+):
+    state_root = isolate_state_root(monkeypatch, tmp_path)
+    store = MemoryRunStore()
+    store.save_run(
+        "run-1",
+        {
+            "run_id": "run-1",
+            "status": "running",
+            "tmux_session": "agy-run-1",
+            "execution_surface": "foreground",
+            "human_attachable": True,
+        },
+    )
+    orchestrator = RunnerOrchestrator(state_root=state_root, store=store)
+    monkeypatch.setattr(orchestration, "_orchestrator", orchestrator)
+    monkeypatch.setattr(orchestration.terminal, "alive", lambda _session: True)
+    monkeypatch.setattr(
+        orchestration.terminal,
+        "send_text",
+        lambda *_args, **_kwargs: pytest.fail("unverifiable input must not be sent"),
+    )
+
+    result = orchestration.send_text(
+        "run-1",
+        "yes",
+        expected_event_key="run-1:000000000001",
+    )
+
+    assert result["sent"] is False
+    assert result["error_kind"] == "stale_observation"
+    assert result["latest_event_key"] is None
+
+
+def test_send_text_accepts_observed_empty_transcript_cursor(monkeypatch, tmp_path):
+    state_root = isolate_state_root(monkeypatch, tmp_path)
+    store = MemoryRunStore()
+    store.save_run(
+        "run-1",
+        {
+            "run_id": "run-1",
+            "status": "running",
+            "conversation_id": None,
+            "tmux_session": "agy-run-1",
+            "execution_surface": "foreground",
+            "human_attachable": True,
+        },
+    )
+    orchestrator = RunnerOrchestrator(state_root=state_root, store=store)
+    monkeypatch.setattr(orchestration, "_orchestrator", orchestrator)
+    session_events.append_event(
+        orchestrator.run_dir("run-1"),
+        "needs_attention",
+        {"observed": {"prompt": "Trust this workspace?"}},
+    )
+    observed = orchestrator.observe(["run-1"])["runs"]["run-1"]
+    sent: list[str] = []
+    monkeypatch.setattr(orchestration.terminal, "alive", lambda _session: True)
+    monkeypatch.setattr(
+        orchestration.terminal,
+        "send_text",
+        lambda _session, text, *, enter=True: sent.append(text),
+    )
+
+    assert observed["cursor"]["transcript_step"] == -1
+    assert observed["cursor"]["event_key"] is not None
+    result = orchestration.send_text(
+        "run-1",
+        "yes",
+        expected_event_key=observed["cursor"]["event_key"],
+        expected_transcript_step=observed["cursor"]["transcript_step"],
+    )
+
+    assert result["sent"] is True
+    assert sent == ["yes"]
+
+
+def test_concurrent_guarded_inputs_allow_only_one_cursor_owner(monkeypatch, tmp_path):
+    state_root = isolate_state_root(monkeypatch, tmp_path)
+    store = MemoryRunStore()
+    store.save_run(
+        "run-1",
+        {
+            "run_id": "run-1",
+            "status": "running",
+            "tmux_session": "agy-run-1",
+            "execution_surface": "foreground",
+            "human_attachable": True,
+        },
+    )
+    orchestrator = RunnerOrchestrator(state_root=state_root, store=store)
+    monkeypatch.setattr(orchestration, "_orchestrator", orchestrator)
+    monkeypatch.setattr(orchestration.terminal, "alive", lambda _session: True)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        orchestration.terminal,
+        "send_text",
+        lambda _session, text, *, enter=True: sent.append(text),
+    )
+    initial = session_events.append_event(
+        orchestrator.run_dir("run-1"),
+        "needs_attention",
+    )
+    barrier = threading.Barrier(2)
+    results: list[dict] = []
+
+    def submit(text):
+        barrier.wait()
+        results.append(
+            orchestration.send_text(
+                "run-1",
+                text,
+                expected_event_key=initial["event_id"],
+            )
+        )
+
+    threads = [threading.Thread(target=submit, args=(text,)) for text in ("yes", "no")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert sorted(result["sent"] for result in results) == [False, True]
+    assert len(sent) == 1
+
+
 def test_open_terminal_rejects_stopped_tmux_session(monkeypatch, tmp_path):
     state_root = isolate_state_root(monkeypatch, tmp_path)
     mem_store = MemoryRunStore()
@@ -1801,6 +1930,93 @@ class DeadProcessManager(ProcessManager):
 
     def kill(self, pid, sig):
         pass
+
+
+class ReusedPidProcessManager(ProcessManager):
+    supports_identity = True
+
+    def __init__(self):
+        self.signals = []
+
+    def spawn(self, args, cwd, stdout, stderr):
+        raise AssertionError("spawn is not expected")
+
+    def is_alive(self, pid):
+        return True
+
+    def command_line(self, pid):
+        return (
+            "python -m codex_agy_bridge.runner --state-root /tmp/state other-run"
+        )
+
+    def killpg(self, gpid, sig):
+        self.signals.append((gpid, sig))
+
+    def kill(self, pid, sig):
+        self.signals.append((pid, sig))
+
+
+def test_cancel_does_not_signal_reused_runner_pid(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "codex_agy_bridge._orchestrator.CANCEL_RUNNER_GRACE_SECONDS",
+        0,
+    )
+    monkeypatch.setattr(
+        "codex_agy_bridge._orchestrator.CANCEL_TERM_GRACE_SECONDS",
+        0,
+    )
+    store = MemoryRunStore()
+    store.save_run(
+        "target-run",
+        {
+            "run_id": "target-run",
+            "status": "running",
+            "runner_pid": 101,
+            "agy_pid": 202,
+            "tmux_session": "agy-target-run",
+        },
+    )
+    session = MockSession(tmp_path / "run")
+    session.start("target-run", ["agy"], tmp_path)
+    manager = ReusedPidProcessManager()
+    orchestrator = RunnerOrchestrator(
+        state_root=tmp_path,
+        store=store,
+        process_manager=manager,
+        session_factory=lambda _state, _run_dir: session,
+    )
+
+    result = orchestrator.cancel("target-run")
+
+    assert result["status"] == "canceled"
+    assert manager.signals == []
+    assert session.is_alive() is False
+
+
+def test_status_rejects_reused_runner_pid_identity(tmp_path):
+    store = MemoryRunStore()
+    store.save_run(
+        "target-run",
+        {
+            "run_id": "target-run",
+            "status": "running",
+            "runner_pid": 101,
+            "tmux_session": "agy-target-run",
+        },
+    )
+    session = MockSession(tmp_path / "run")
+    session.start("target-run", ["agy"], tmp_path)
+    orchestrator = RunnerOrchestrator(
+        state_root=tmp_path,
+        store=store,
+        process_manager=ReusedPidProcessManager(),
+        session_factory=lambda _state, _run_dir: session,
+    )
+
+    result = orchestrator.status("target-run")
+
+    assert result["status"] == "failed"
+    assert result["error"] == "runner exited before recording a terminal status"
 
 
 def test_concurrent_identical_starts_reserve_queued_run(monkeypatch, tmp_path):

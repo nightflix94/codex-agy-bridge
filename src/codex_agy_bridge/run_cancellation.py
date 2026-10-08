@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import signal
 import time
 from collections.abc import Callable
@@ -147,20 +148,7 @@ class RunCanceler:
             return False
 
     def _process_belongs_to_run(self, pid: int, role: str, state: RunState) -> bool:
-        command = self.process_manager.command_line(pid)
-        if not self.process_manager.supports_identity:
-            return True
-        if not command:
-            return False
-        if role == "runner":
-            return "codex_agy_bridge" in command
-        configured = state.get("command")
-        executable = (
-            configured[0]
-            if isinstance(configured, list) and configured
-            else "agy"
-        )
-        return str(executable) in command or Path(str(executable)).name in command
+        return process_belongs_to_run(self.process_manager, pid, role, state)
 
     @staticmethod
     def _session_belongs_to_run(state: RunState) -> bool:
@@ -194,3 +182,59 @@ def _run_age_seconds(state: RunState) -> float | None:
     except ValueError:
         return None
     return max(0.0, time.time() - started.timestamp())
+
+
+def process_belongs_to_run(
+    process_manager: ProcessManager,
+    pid: int,
+    role: str,
+    state: RunState,
+) -> bool:
+    """Return whether a live PID has run-specific ownership evidence.
+
+    A bare executable match is not sufficient: after PID reuse it identifies
+    another bridge worker or another ``agy`` process just as readily. Production
+    runners include the run ID as their final argument, so that token is the
+    minimum safe identity. The child CLI has no run-specific argument and is
+    therefore terminated through its owned tmux session instead of by PID.
+    """
+    if not process_manager.supports_identity:
+        return True
+    command = process_manager.command_line(pid)
+    if not command or role != "runner":
+        return False
+    return _runner_command_belongs_to_state(command, state)
+
+
+def _runner_command_belongs_to_state(command: str, state: RunState) -> bool:
+    run_id = state.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return "codex_agy_bridge.runner" in command and run_id in tokens
+
+
+def runner_process_alive(
+    process_manager: ProcessManager,
+    state: RunState,
+) -> bool:
+    """Check liveness without mistaking a reused PID for this Run's worker."""
+    runner_pid = state.get("runner_pid")
+    if not isinstance(runner_pid, int) or runner_pid <= 0:
+        return False
+    try:
+        if not process_manager.is_alive(runner_pid):
+            return False
+        if not process_manager.supports_identity:
+            return True
+        command = process_manager.command_line(runner_pid)
+        # A transient ``ps`` failure is not evidence that a live supervisor
+        # exited; status reconciliation must not irreversibly fail the Run.
+        if command is None:
+            return True
+        return _runner_command_belongs_to_state(command, state)
+    except (OSError, TypeError, ValueError):
+        return False

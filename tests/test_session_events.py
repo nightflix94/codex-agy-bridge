@@ -70,6 +70,31 @@ def test_read_events_after_cursor_returns_only_newer_events(tmp_path):
     ) == [second]
 
 
+def test_append_event_if_latest_is_atomic_compare_and_set(tmp_path):
+    run_dir = tmp_path / "runs" / "run-1"
+    first = session_events.append_event(run_dir, "needs_attention")
+
+    appended, observed = session_events.append_event_if_latest(
+        run_dir,
+        first["event_id"],
+        "mcp_input_submitted",
+    )
+    rejected, latest = session_events.append_event_if_latest(
+        run_dir,
+        first["event_id"],
+        "mcp_input_submitted",
+    )
+
+    assert appended is not None
+    assert observed == first["event_id"]
+    assert rejected is None
+    assert latest == appended["event_id"]
+    assert [event["kind"] for event in session_events.read_events(run_dir)] == [
+        "needs_attention",
+        "mcp_input_submitted",
+    ]
+
+
 def test_read_events_accepts_event_id_cursor(tmp_path):
     run_dir = tmp_path / "runs" / "run-1"
     first = session_events.append_event(run_dir, "run_started")

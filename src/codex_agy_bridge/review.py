@@ -13,6 +13,8 @@ from codex_agy_bridge.state import ACTIVE_STATUSES, RunState
 
 REVIEW_SCHEMA = "agy.review.v1"
 REVIEW_TASK_KINDS = {"review_commit", "review_branch", "review_files"}
+FINDING_SEVERITIES = {"critical", "high", "medium", "low", "info", "blocking"}
+REVIEW_TEXT_FIELDS = ("message", "title", "summary", "description")
 REVIEW_ARTIFACT = {
     "kind": "review_json",
     "schema": REVIEW_SCHEMA,
@@ -330,6 +332,14 @@ def validate_artifact(value: Any) -> list[str]:
         errors.append("files_inspected must be an array")
     if not isinstance(commands_run, list):
         errors.append("commands_run must be an array")
+    if isinstance(findings, list):
+        errors.extend(_validate_findings(findings))
+    if isinstance(blockers, list):
+        errors.extend(_validate_object_entries(blockers, "blockers"))
+    if isinstance(files_inspected, list):
+        errors.extend(_validate_string_entries(files_inspected, "files_inspected"))
+    if isinstance(commands_run, list):
+        errors.extend(_validate_string_entries(commands_run, "commands_run"))
     if isinstance(findings, list) and not findings:
         if isinstance(blockers, list) and blockers:
             return errors
@@ -338,6 +348,45 @@ def validate_artifact(value: Any) -> list[str]:
         if isinstance(commands_run, list) and not commands_run:
             errors.append("commands_run must not be empty")
     return errors
+
+
+def _validate_findings(findings: list[Any]) -> list[str]:
+    errors = _validate_object_entries(findings, "findings")
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            continue
+        severity = finding.get("severity")
+        if severity not in FINDING_SEVERITIES:
+            errors.append(
+                f"findings[{index}].severity must be one of "
+                f"{', '.join(sorted(FINDING_SEVERITIES))}"
+            )
+    return errors
+
+
+def _validate_object_entries(values: list[Any], label: str) -> list[str]:
+    errors: list[str] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, dict):
+            errors.append(f"{label}[{index}] must be an object")
+            continue
+        if not any(
+            isinstance(value.get(field), str) and value[field].strip()
+            for field in REVIEW_TEXT_FIELDS
+        ):
+            fields = ", ".join(REVIEW_TEXT_FIELDS)
+            errors.append(
+                f"{label}[{index}] must include non-empty text in one of: {fields}"
+            )
+    return errors
+
+
+def _validate_string_entries(values: list[Any], label: str) -> list[str]:
+    return [
+        f"{label}[{index}] must be a non-empty string"
+        for index, value in enumerate(values)
+        if not isinstance(value, str) or not value.strip()
+    ]
 
 
 def summarize(review: dict[str, Any]) -> dict[str, Any]:
@@ -395,10 +444,10 @@ def _review_prompt(
             "{",
             f'  "schema": "{REVIEW_SCHEMA}",',
             '  "verdict": "accepted | rejected | unknown",',
-            '  "findings": [],',
-            '  "blockers": [],',
-            '  "files_inspected": [],',
-            '  "commands_run": []',
+            '  "findings": [{"severity": "high", "message": "..."}],',
+            '  "blockers": [{"kind": "...", "message": "..."}],',
+            '  "files_inspected": ["path/to/file"],',
+            '  "commands_run": ["command --flag"]',
             "}",
         ]
     )

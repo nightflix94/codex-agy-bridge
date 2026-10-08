@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
+from codex_agy_bridge.expected_artifact import ArtifactFingerprint
+from codex_agy_bridge.harness_contract import ToolCall
+
 RunStatus = Literal[
     "queued",
     "launching",
@@ -34,7 +37,7 @@ class RunState(TypedDict, total=False):
     workspace: str
     artifact_dir: str
     expected_file: str | None
-    expected_file_baseline: dict[str, int] | None
+    expected_file_baseline: ArtifactFingerprint | None
     prompt: str
     prompt_preview: str
     completion_marker: str
@@ -70,6 +73,7 @@ class RunState(TypedDict, total=False):
     interactive_prompt_in_flight: bool
     notification_resource_uri: str
     wait_tool: str
+    wait_call: ToolCall
     task_kind: str
     review_schema: str
     review_output_file: str

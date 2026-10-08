@@ -87,11 +87,11 @@ sequenceDiagram
     participant A as Antigravity
 
     C->>O: agy_run_input(run_id, text, expected_event_key, expected_transcript_step)
-    O->>E: read latest event key and transcript step
+    O->>E: lock per-Run input delivery and read latest cursors
     alt cursor is stale
         O-->>C: rejected with latest step/status
     else cursor still current
-        O->>E: append mcp_input_submitted
+        O->>E: compare-and-append mcp_input_submitted under event lock
         O->>T: send literal text/Enter
         O->>E: append mcp_input_delivered or mcp_input_failed
         O-->>C: delivered or failed delivery state
@@ -103,6 +103,10 @@ Input is an optimistic write, similar to Kubernetes `resourceVersion` updates:
 Codex can pass the event key and transcript step it observed. If the Run has
 advanced, the bridge refuses to send keys and returns fresh evidence. This
 prevents Codex from answering an old prompt after Antigravity already moved on.
+Input submissions are serialized per Run, and the event-cursor comparison plus
+reservation append is atomic; concurrent callers cannot both consume the same
+observed cursor. Guarded input also fails closed when either expected cursor
+cannot be read back.
 
 #### Progress-Stall Wakeup
 
