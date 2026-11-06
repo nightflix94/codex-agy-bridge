@@ -88,8 +88,8 @@ def test_run_request_prepares_identity_and_initial_state(tmp_path):
         "full and final response the calling harness should show the user"
         in state["prompt"]
     )
-    assert "last line only after all requested files" in state["prompt"]
-    assert state["prompt"].endswith("DONE")
+    assert "only after all requested files and edits are complete" in state["prompt"]
+    assert state["prompt"].endswith("Part 1: DO\nPart 2: NE")
     assert state["previous_conversation_id"] == "previous"
 
 

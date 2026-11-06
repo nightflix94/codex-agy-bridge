@@ -62,17 +62,34 @@ def format_task_packet(
     )
     if artifact_dir:
         lines.append("- Mention any files written under the shared artifact directory.")
+    head, tail = split_completion_marker(completion_marker)
     lines.extend(
         [
             "",
             "Completion marker:",
             (
                 "Strongly suggested: first write the full and final response "
-                "the calling harness should show the user, then print this marker as "
-                "the "
-                "last line only after all requested files and edits are complete:"
+                "the calling harness should show the user. Then, only after all "
+                "requested files and edits are complete, print the completion "
+                "marker as the last line. Build the marker by joining the two "
+                "parts below with nothing between them (no space, quotes, or "
+                "labels):"
             ),
-            completion_marker,
+            f"Part 1: {head}",
+            f"Part 2: {tail}",
         ]
     )
     return "\n".join(lines)
+
+
+def split_completion_marker(marker: str) -> tuple[str, str]:
+    """Split a marker so the packet never contains it verbatim.
+
+    Antigravity's TUI echoes the whole packet into the terminal. If the packet
+    held the literal marker, the echo would be indistinguishable from the agent
+    printing it, and a Run could "complete" on its own prompt.
+    """
+    cut = marker.rfind("_") + 1
+    if not 0 < cut < len(marker):
+        cut = max(1, len(marker) // 2)
+    return marker[:cut], marker[cut:]

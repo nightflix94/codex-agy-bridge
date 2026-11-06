@@ -27,10 +27,11 @@ if "--help" in sys.argv:
 
 root = Path(os.environ["AGY_BRIDGE_AGY_ROOT"])
 conversation_id = "fake-conversation"
-completion_marker = re.search(
-    r"AGY_RUN_COMPLETE_[0-9a-f]+",
+marker_parts = re.search(
+    r"Part 1: (\\S+)\\nPart 2: (\\S+)",
     sys.argv[-1],
-).group(0)
+)
+completion_marker = marker_parts.group(1) + marker_parts.group(2)
 mapping = root / "cache" / "last_conversations.json"
 mapping.parent.mkdir(parents=True, exist_ok=True)
 mapping.write_text(json.dumps({str(Path.cwd()): conversation_id}))

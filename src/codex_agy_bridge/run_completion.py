@@ -23,6 +23,12 @@ INCOMPLETE_RESPONSE_PHRASES = (
     "when it finishes",
 )
 TERMINAL_COMPLETION_MIN_RESPONSE_CHARS = 8
+TERMINAL_TAIL_BYTES = 80_000
+# Non-empty lines marker_is_echoed_task_prompt inspects above a marker. When
+# evidence starts mid-stream (a log tail or the visible pane), a marker with
+# fewer lines than this above it cannot be told apart from the echoed packet,
+# so it is ignored rather than trusted.
+ECHO_CONTEXT_LINES = 12
 # Chrome the interactive TUI draws while work is still running. Under
 # --prompt-interactive the packet stays on screen, so the marker is rendered
 # many times over and a slice between occurrences can capture the pane
@@ -66,12 +72,15 @@ class CompletionMonitor:
         marker = str(self.state["completion_marker"])
         if not marker:
             return None
-        for text in self._terminal_candidates(session):
+        for text, starts_mid_stream in self._terminal_candidates(session):
             response_start = 0
             marker_at = text.find(marker)
             while marker_at >= 0:
                 marker_end = marker_at + len(marker)
-                if marker_is_echoed_task_prompt(text, marker_at):
+                if (
+                    starts_mid_stream
+                    and not has_echo_context(text, marker_at)
+                ) or marker_is_echoed_task_prompt(text, marker_at):
                     response_start = marker_end
                     marker_at = text.find(marker, marker_end)
                     continue
@@ -185,8 +194,9 @@ class CompletionMonitor:
             return f"expected file is unavailable: {expected_file} ({error})"
         return f"expected file was not written or is empty: {expected_file}"
 
-    def _terminal_candidates(self, session: str | None) -> list[str]:
-        candidates: list[str] = []
+    def _terminal_candidates(self, session: str | None) -> list[tuple[str, bool]]:
+        """Return (text, starts_mid_stream) evidence pairs."""
+        candidates: list[tuple[str, bool]] = []
         # terminal-progress.log is deliberately absent: the bridge writes it
         # itself from transcript steps, echoed task packet included, so it can
         # only repeat what the transcript already holds. Treating it as
@@ -196,16 +206,17 @@ class CompletionMonitor:
             "agy.stdout.log",
             "agy.stderr.log",
         ):
-            text = read_tail(self.directory / name, 80_000)
+            text, truncated = read_tail(self.directory / name, TERMINAL_TAIL_BYTES)
             if text:
-                candidates.append(terminal.clean_text(text))
+                candidates.append((terminal.clean_text(text), truncated))
         if session:
             try:
                 snapshot = terminal.capture_pane(session, timeout_seconds=0.2)
             except terminal.TmuxCommandError:
                 snapshot = ""
             if snapshot:
-                candidates.append(terminal.clean_text(snapshot))
+                # The pane's top edge is a cut too: scrollback above it is gone.
+                candidates.append((terminal.clean_text(snapshot), True))
         return candidates
 
     def _empty_response_error(self, return_code: int) -> str:
@@ -297,11 +308,22 @@ def shows_terminal_ui_chrome(response: str) -> bool:
     return any(artifact in lowered for artifact in TERMINAL_UI_ARTIFACTS)
 
 
-def read_tail(path: Path, max_bytes: int) -> str:
+def has_echo_context(text: str, marker_at: int) -> bool:
+    """Return whether enough lines precede a marker to classify it."""
+    previous_lines = text[:marker_at].splitlines()
+    # The first line of a mid-stream window is usually a fragment.
+    complete_lines = previous_lines[1:]
+    non_empty = sum(1 for line in complete_lines if normalize_task_prompt_line(line))
+    return non_empty >= ECHO_CONTEXT_LINES
+
+
+def read_tail(path: Path, max_bytes: int) -> tuple[str, bool]:
+    """Return the file's last max_bytes and whether earlier bytes were cut."""
     try:
         with path.open("rb") as handle:
             handle.seek(0, 2)
-            handle.seek(max(0, handle.tell() - max_bytes))
-            return handle.read().decode("utf-8", errors="replace")
+            start = max(0, handle.tell() - max_bytes)
+            handle.seek(start)
+            return handle.read().decode("utf-8", errors="replace"), start > 0
     except OSError:
-        return ""
+        return "", False

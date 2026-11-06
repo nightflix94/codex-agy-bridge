@@ -2758,3 +2758,122 @@ def test_an_undecided_claim_backs_off_before_retrying(monkeypatch, tmp_path):
     clock.advance(0.5)
     supervisor._observe_conversation()
     assert attempts == [0.0, 1.0, 3.0]
+
+
+REAL_MARKER = "AGY_RUN_COMPLETE_d5bb50939a9741dab80abf76ddb00e61"
+
+
+def _echoed_legacy_packet(marker: str) -> str:
+    """The packet as Antigravity echoed it before markers were split."""
+    return "\n".join(
+        [
+            "  Task:",
+            "  do work",
+            "",
+            "  Completion marker:",
+            "  Strongly suggested: first write the full and final response the "
+            "calling",
+            "  harness should show the user, then print this marker as the last "
+            "line only",
+            "  after all requested files and edits are complete:",
+            f"  {marker}",
+            "",
+        ]
+    )
+
+
+def _supervisor_over_log(monkeypatch, tmp_path, log: str, marker: str = REAL_MARKER):
+    from codex_agy_bridge import terminal
+
+    def no_pane(*_args, **_kwargs):
+        raise TmuxCommandError("no pane in tests")
+
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "completion_marker": marker,
+        "prompt": "do work",
+        "tmux_session": "agy-run-1",
+    }
+    (tmp_path / "terminal.log").write_bytes(log.encode("ascii"))
+    monkeypatch.setattr(terminal, "capture_pane", no_pane)
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    return RunSupervisor("run-1")
+
+
+def test_tail_cut_through_echoed_packet_does_not_complete(monkeypatch, tmp_path):
+    """Regression: runs 709bdd3d and 183826ff completed on their own prompt.
+
+    The tail window began two lines above the echoed marker, past the
+    "Completion marker:" heading, so the echo check could not recognise it.
+    """
+    from codex_agy_bridge.run_completion import TERMINAL_TAIL_BYTES
+
+    head = "boot noise\n" * 50 + _echoed_legacy_packet(REAL_MARKER)
+    cut_at = head.index("line only\n")
+    filler_line = "  Reading file...\n"
+    filler_bytes = TERMINAL_TAIL_BYTES - (len(head) - cut_at)
+    filler = filler_line * (filler_bytes // len(filler_line))
+    filler += "x" * (filler_bytes - len(filler))
+    log = head + filler
+    assert len(log) - TERMINAL_TAIL_BYTES == cut_at  # window starts at the cut
+    supervisor = _supervisor_over_log(monkeypatch, tmp_path, log)
+
+    assert supervisor._terminal_completion_response() is None
+
+
+def test_real_marker_at_end_of_truncated_log_still_completes(monkeypatch, tmp_path):
+    log = (
+        _echoed_legacy_packet(REAL_MARKER)
+        + "  Reading file...\n" * 6000
+        + "Changed files: src/gate.ts\nVerification: typecheck passed.\n"
+        + "\n".join(f"- detail {n}" for n in range(12))
+        + f"\n{REAL_MARKER}\n"
+    )
+    supervisor = _supervisor_over_log(monkeypatch, tmp_path, log)
+
+    response = supervisor._terminal_completion_response()
+    assert response is not None
+    assert response.rstrip().endswith(REAL_MARKER)
+    assert "Verification: typecheck passed." in response
+
+
+def test_pane_marker_without_context_above_it_is_ignored(monkeypatch, tmp_path):
+    from codex_agy_bridge import terminal
+
+    supervisor = _supervisor_over_log(monkeypatch, tmp_path, "")
+    (tmp_path / "terminal.log").unlink()
+    supervisor.session = "agy-run-1"  # normally set at launch
+    monkeypatch.setattr(
+        terminal,
+        "capture_pane",
+        lambda *_a, **_k: (
+            "  harness can show once the gate edits land and checks pass.\n"
+            f"  {REAL_MARKER}\n  Reading file...\n"
+        ),
+    )
+
+    assert supervisor._terminal_completion_response() is None
+
+
+def test_task_packet_never_contains_the_literal_marker():
+    packet = format_task_packet(
+        "do work", completion_marker=REAL_MARKER, workspace="/repo"
+    )
+
+    assert REAL_MARKER not in packet
+    part1 = packet.split("Part 1: ", 1)[1].splitlines()[0]
+    part2 = packet.split("Part 2: ", 1)[1].splitlines()[0]
+    assert part1 + part2 == REAL_MARKER
+
+
+def test_echoed_split_packet_does_not_complete(monkeypatch, tmp_path):
+    packet = format_task_packet(
+        "do work", completion_marker=REAL_MARKER, workspace=str(tmp_path)
+    )
+    log = packet + "\n" + "  Reading file...\n" * 6000
+    supervisor = _supervisor_over_log(monkeypatch, tmp_path, log)
+
+    assert supervisor._terminal_completion_response() is None
