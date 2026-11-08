@@ -90,7 +90,10 @@ def test_public_transcript_reads_are_stateless(tmp_path, monkeypatch):
     brain = tmp_path / "brain"
     monkeypatch.setattr(core, "BRAIN_DIR", brain)
     transcript = (
-        brain / "conversation-incremental" / ".system_generated" / "logs"
+        brain
+        / "conversation-incremental"
+        / ".system_generated"
+        / "logs"
         / "transcript.jsonl"
     )
     transcript.parent.mkdir(parents=True)
@@ -136,9 +139,10 @@ def test_public_transcript_reads_are_stateless(tmp_path, monkeypatch):
         )
 
     assert core.final_response("conversation-incremental") == "second"
-    assert core.compact_steps("conversation-incremental", after_step=1)[-1][
-        "step_index"
-    ] == 2
+    assert (
+        core.compact_steps("conversation-incremental", after_step=1)[-1]["step_index"]
+        == 2
+    )
     assert parsed == 6
 
 
@@ -146,7 +150,10 @@ def test_transcript_cache_handles_partial_lines_and_truncation(tmp_path, monkeyp
     brain = tmp_path / "brain"
     monkeypatch.setattr(core, "BRAIN_DIR", brain)
     transcript = (
-        brain / "conversation-changing" / ".system_generated" / "logs"
+        brain
+        / "conversation-changing"
+        / ".system_generated"
+        / "logs"
         / "transcript.jsonl"
     )
     transcript.parent.mkdir(parents=True)
@@ -425,9 +432,7 @@ def test_run_provider_health_reads_terminal_and_stderr_auth_signals(tmp_path):
         encoding="utf-8",
     )
 
-    assert core.run_provider_health(tmp_path)["status"] == (
-        "auth_interaction_required"
-    )
+    assert core.run_provider_health(tmp_path)["status"] == ("auth_interaction_required")
 
 
 def test_run_provider_health_prefers_current_auth_failure_over_stale_success(
@@ -442,17 +447,13 @@ def test_run_provider_health_prefers_current_auth_failure_over_stale_success(
         encoding="utf-8",
     )
 
-    assert core.run_provider_health(tmp_path)["status"] == (
-        "auth_interaction_required"
-    )
+    assert core.run_provider_health(tmp_path)["status"] == ("auth_interaction_required")
 
 
 def test_validate_identifier_rejects_shell_metacharacters():
     for value in ("run one", "run;one", "run$one", "run:one", "`run`"):
         with pytest.raises(ValueError):
             core.validate_identifier(value, "run_id")
-
-
 
 
 def test_active_runs_reserves_queued_run_before_runner_pid_exists(tmp_path):

@@ -90,11 +90,14 @@ def test_tmux_session_kill_terminates_new_session_descendant(tmp_path: Path):
 
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if subprocess.run(
-                ["ps", "-p", str(child_pid)],
-                capture_output=True,
-                check=False,
-            ).returncode != 0:
+            if (
+                subprocess.run(
+                    ["ps", "-p", str(child_pid)],
+                    capture_output=True,
+                    check=False,
+                ).returncode
+                != 0
+            ):
                 break
             time.sleep(0.05)
         else:

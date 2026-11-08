@@ -154,12 +154,9 @@ async def test_stdio_initialization_and_tool_contract(tmp_path):
         tool for tool in tools.tools if tool.name == "agy_review_branch"
     )
     assert (
-        review_branch.inputSchema["properties"]["include_untracked"]["default"]
-        is True
+        review_branch.inputSchema["properties"]["include_untracked"]["default"] is True
     )
-    review_files = next(
-        tool for tool in tools.tools if tool.name == "agy_review_files"
-    )
+    review_files = next(tool for tool in tools.tools if tool.name == "agy_review_files")
     assert "paths" in review_files.inputSchema["required"]
     assert "artifact-gated" in review_files.description
     review_result = next(

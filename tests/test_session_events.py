@@ -157,10 +157,7 @@ def test_latest_event_key_scans_past_default_read_limit(tmp_path):
     run_dir = tmp_path / "runs" / "run-1"
     run_dir.mkdir(parents=True)
     lines = [
-        (
-            f'{{"event_id":"{index}","run_id":"run-1",'
-            f'"kind":"terminal_output_observed"}}'
-        )
+        (f'{{"event_id":"{index}","run_id":"run-1","kind":"terminal_output_observed"}}')
         for index in range(1, 102)
     ]
     (run_dir / "session-events.jsonl").write_text("\n".join(lines), encoding="utf-8")

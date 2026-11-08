@@ -73,10 +73,7 @@ def test_truncated_forward_plan_without_tool_calls_is_not_a_final_response(tmp_p
     path = tmp_path / "transcript.jsonl"
     partial = _record(
         8,
-        content=(
-            "I will write the test file "
-            "`/Users/example/workspace/test/format"
-        ),
+        content=("I will write the test file `/Users/example/workspace/test/format"),
     )
     _write_records(path, partial)
     harvester = TranscriptHarvester("conversation-1", path)
@@ -274,11 +271,7 @@ def test_conversation_factory_owns_exact_path_layout(tmp_path):
 
     assert conversation.conversation_id == "conversation-1"
     assert conversation.path == (
-        tmp_path
-        / "conversation-1"
-        / ".system_generated"
-        / "logs"
-        / "transcript.jsonl"
+        tmp_path / "conversation-1" / ".system_generated" / "logs" / "transcript.jsonl"
     )
 
 
@@ -348,11 +341,14 @@ def test_compaction_and_cursor_safe_paging_have_distinct_ordering(tmp_path):
     assert conversation.compact_steps(limit=1, max_content_chars=0)[0]["tools"] == [
         "tool-4"
     ]
-    assert conversation.compact_steps(
-        limit=1,
-        include_content=True,
-        max_content_chars=8,
-    )[0]["content"] == "line 4 v"
+    assert (
+        conversation.compact_steps(
+            limit=1,
+            include_content=True,
+            max_content_chars=8,
+        )[0]["content"]
+        == "line 4 v"
+    )
     assert conversation.compact_step_page(limit=2) == {
         "steps": compact_step_records(records[:2], limit=2),
         "next_after": 2,
@@ -407,26 +403,38 @@ def test_discovery_functions_use_explicit_paths_and_exact_wrapped_prompt(tmp_pat
     os.utime(old.path.parents[2], (100.0, 100.0))
     os.utime(newest.path.parents[2], (200.0, 200.0))
 
-    assert conversation_for_prompt_after(
-        "deploy production",
-        started_after=0,
-        brain_dir=brain,
-    ) == "newest"
-    assert conversation_for_prompt_after(
-        "deploy",
-        started_after=0,
-        brain_dir=brain,
-    ) == "old"
-    assert conversation_for_prompt_after(
-        "production",
-        started_after=0,
-        brain_dir=brain,
-    ) is None
-    assert conversation_for_prompt_after(
-        "anything",
-        started_after=0,
-        brain_dir=Path(tmp_path / "missing-brain"),
-    ) is None
+    assert (
+        conversation_for_prompt_after(
+            "deploy production",
+            started_after=0,
+            brain_dir=brain,
+        )
+        == "newest"
+    )
+    assert (
+        conversation_for_prompt_after(
+            "deploy",
+            started_after=0,
+            brain_dir=brain,
+        )
+        == "old"
+    )
+    assert (
+        conversation_for_prompt_after(
+            "production",
+            started_after=0,
+            brain_dir=brain,
+        )
+        is None
+    )
+    assert (
+        conversation_for_prompt_after(
+            "anything",
+            started_after=0,
+            brain_dir=Path(tmp_path / "missing-brain"),
+        )
+        is None
+    )
 
 
 def _truncated_user_input(prompt: str, *, head: int, tail: int) -> str:
@@ -522,9 +530,7 @@ def test_conversation_is_read_from_the_run_log(tmp_path):
     log = tmp_path / "agy.log"
     log.write_text(
         "starting up\n"
-        + _AGY_LOG_LINE.format(
-            conversation_id="85ffff6e-41c9-4961-b1ea-7120071b1737"
-        )
+        + _AGY_LOG_LINE.format(conversation_id="85ffff6e-41c9-4961-b1ea-7120071b1737")
         + "Streaming conversation 85ffff6e-41c9-4961-b1ea-7120071b1737\n",
         encoding="utf-8",
     )

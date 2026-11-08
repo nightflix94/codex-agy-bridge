@@ -135,9 +135,10 @@ async def test_v1_00_fresh_mcp_server_uses_current_checkout(tmp_path):
         doctor = await _call(session, "agy_doctor", {})
 
     assert doctor["bridge"]["git_commit"] == _git_head()
-    assert Path(doctor["bridge"]["source_path"]).resolve() == (
-        Path(__file__).parents[1] / "src" / "codex_agy_bridge"
-    ).resolve()
+    assert (
+        Path(doctor["bridge"]["source_path"]).resolve()
+        == (Path(__file__).parents[1] / "src" / "codex_agy_bridge").resolve()
+    )
     assert doctor["cli"]["errors"] == {}
     assert doctor["cli"]["capabilities"] == {
         "sandbox": True,
@@ -477,9 +478,7 @@ async def test_v1_11_sandbox_denies_outside_write(tmp_path):
             if run_id:
                 await _cancel_and_assert_clean(session, run_id)
     if containment_failed:
-        pytest.xfail(
-            "Antigravity 1.0.8 --sandbox does not contain filesystem writes"
-        )
+        pytest.xfail("Antigravity 1.0.8 --sandbox does not contain filesystem writes")
 
 
 async def test_v1_12_additional_directory_write_boundary(tmp_path):

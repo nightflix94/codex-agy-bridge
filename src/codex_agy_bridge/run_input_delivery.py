@@ -38,9 +38,8 @@ def deliver(
     """Send text to a Run's foreground execution session."""
     delivery_id = uuid.uuid4().hex
     input_bytes = len(text.encode("utf-8"))
-    if (
-        state.get("execution_surface") != "foreground"
-        or not state.get("human_attachable")
+    if state.get("execution_surface") != "foreground" or not state.get(
+        "human_attachable"
     ):
         raise ValueError("text input is only supported for foreground attachable Runs")
     if input_bytes > INPUT_MAX_BYTES:

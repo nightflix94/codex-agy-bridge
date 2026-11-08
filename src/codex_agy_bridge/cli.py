@@ -268,9 +268,7 @@ class AntigravityCli:
             if directories and not capabilities.additional_directories:
                 raise ValueError("installed agy does not support --add-dir")
             if visible_cli and not capabilities.interactive:
-                raise ValueError(
-                    "installed agy does not support --prompt-interactive"
-                )
+                raise ValueError("installed agy does not support --prompt-interactive")
 
         command = [
             self.executable,
@@ -337,6 +335,4 @@ _MODEL_LINE_RE = re.compile(r"(\S+)\t(\S.*)")
 
 def _model_matches(catalog: list[ModelEntry], name: str) -> list[ModelEntry]:
     """Return every model whose ID or display name is exactly ``name``."""
-    return [
-        entry for entry in catalog if name in {entry.id, entry.display_name}
-    ]
+    return [entry for entry in catalog if name in {entry.id, entry.display_name}]

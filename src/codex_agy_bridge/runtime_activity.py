@@ -164,10 +164,7 @@ def capture_process_tree(root_pid: int | None) -> ProcessSample:
         pending.extend(children.get(pid, ()))
 
     fingerprint = tuple(
-        sorted(
-            (pid, rows[pid][0], rows[pid][1], rows[pid][3])
-            for pid in selected
-        )
+        sorted((pid, rows[pid][0], rows[pid][1], rows[pid][3]) for pid in selected)
     )
     return ProcessSample(
         available=True,

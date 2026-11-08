@@ -507,11 +507,7 @@ class RunnerOrchestrator:
             # undecided; in-memory stores have no unreadable representation.
             running = self.store.list_ownership_holders()
             duplicate = next(
-                (
-                    state
-                    for state in running
-                    if request.duplicates(state)
-                ),
+                (state for state in running if request.duplicates(state)),
                 None,
             )
             if duplicate is not None:

@@ -60,9 +60,10 @@ async def _registered_mcp_session(state_root: Path) -> AsyncIterator[ClientSessi
         await session.initialize()
         doctor = await _call(session, "agy_doctor", {})
         assert doctor["bridge"]["git_commit"] == _git_head()
-        assert Path(doctor["bridge"]["source_path"]).resolve() == (
-            REPO_ROOT / "src" / "codex_agy_bridge"
-        ).resolve()
+        assert (
+            Path(doctor["bridge"]["source_path"]).resolve()
+            == (REPO_ROOT / "src" / "codex_agy_bridge").resolve()
+        )
         yield session
 
 
@@ -181,9 +182,7 @@ async def test_v1_18_large_interactive_queue(tmp_path):
     workspace.mkdir()
     state_root = tmp_path / "state"
     nonce = uuid.uuid4().hex
-    acknowledgements = [
-        f"V1_ACK_{nonce}_{index:03d}" for index in range(100)
-    ]
+    acknowledgements = [f"V1_ACK_{nonce}_{index:03d}" for index in range(100)]
     run_id = ""
     report: dict[str, Any] = {
         "test": "V1-18",
@@ -245,9 +244,7 @@ async def test_v1_18_large_interactive_queue(tmp_path):
             after_step = -1
             drain_started = time.monotonic()
             deadline = drain_started + 3_600
-            max_queue_depth = int(
-                queued["interactive_queue"]["queued_prompts"]
-            )
+            max_queue_depth = int(queued["interactive_queue"]["queued_prompts"])
             token_pattern = re.compile(rf"V1_ACK_{nonce}_\d{{3}}")
             while len(delivered) < len(acknowledgements):
                 assert time.monotonic() < deadline, (
@@ -448,8 +445,7 @@ async def test_v1_19_mixed_capacity_soak(tmp_path):
                 active_count = doctor["capacity"]["active_runs"]
                 assert active_count == 4, doctor["capacity"]
                 assert all(
-                    status["status"] in {"queued", "running"}
-                    for status in statuses
+                    status["status"] in {"queued", "running"} for status in statuses
                 ), statuses
                 assert goal_status["status"] in {"pending", "running"}
                 report["samples"].append(
@@ -458,8 +454,7 @@ async def test_v1_19_mixed_capacity_soak(tmp_path):
                         - max(0, deadline - time.monotonic()),
                         "active_runs": active_count,
                         "statuses": {
-                            status["run_id"]: status["status"]
-                            for status in statuses
+                            status["run_id"]: status["status"] for status in statuses
                         },
                         "state_bytes": _tree_size(state_root),
                     }

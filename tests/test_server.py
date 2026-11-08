@@ -217,12 +217,15 @@ def test_run_start_forwards_stale_policy(monkeypatch, tmp_path):
 
     monkeypatch.setattr(server.orchestration, "create_run", create_run)
 
-    assert server.agy_run_start(
-        prompt="work",
-        workspace=str(tmp_path),
-        stale_timeout_seconds=75,
-        stale_action="cancel",
-    ) == state
+    assert (
+        server.agy_run_start(
+            prompt="work",
+            workspace=str(tmp_path),
+            stale_timeout_seconds=75,
+            stale_action="cancel",
+        )
+        == state
+    )
 
 
 def test_interactive_run_rejects_expected_file(tmp_path):
@@ -280,12 +283,15 @@ def test_goal_start_target_returns_auth_required_payload(monkeypatch):
 
     monkeypatch.setattr(server.orchestration, "start_goal_target", auth_required)
 
-    assert server.agy_goal(
-        action="start_target",
-        goal_id="goal-1",
-        target_name="alpha",
-        prompt="work",
-    ) == payload
+    assert (
+        server.agy_goal(
+            action="start_target",
+            goal_id="goal-1",
+            target_name="alpha",
+            prompt="work",
+        )
+        == payload
+    )
 
 
 def test_run_wait_documents_its_slice_cap():

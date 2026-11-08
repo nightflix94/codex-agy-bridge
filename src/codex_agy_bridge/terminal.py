@@ -41,6 +41,8 @@ def _path_without_virtualenv() -> str | None:
     ]
     cleaned = os.pathsep.join(kept)
     return cleaned if cleaned != path else None
+
+
 CONTROL_STRING_RE = re.compile(
     r"(?:\x1b[P^_X]|[\x90\x98\x9e\x9f]).*?(?:\x1b\\|\x9c)",
     re.DOTALL,

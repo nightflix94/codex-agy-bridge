@@ -78,8 +78,7 @@ class CompletionMonitor:
             while marker_at >= 0:
                 marker_end = marker_at + len(marker)
                 if (
-                    starts_mid_stream
-                    and not has_echo_context(text, marker_at)
+                    starts_mid_stream and not has_echo_context(text, marker_at)
                 ) or marker_is_echoed_task_prompt(text, marker_at):
                     response_start = marker_end
                     marker_at = text.find(marker, marker_end)
@@ -266,8 +265,8 @@ def marker_is_echoed_task_prompt(text: str, marker_at: int) -> bool:
         # instructions and the marker share one line.
         return True
     try:
-        heading_index = len(previous_lines) - 1 - previous_lines[::-1].index(
-            "Completion marker:"
+        heading_index = (
+            len(previous_lines) - 1 - previous_lines[::-1].index("Completion marker:")
         )
     except ValueError:
         return False

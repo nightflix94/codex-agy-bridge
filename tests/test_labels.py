@@ -19,6 +19,7 @@ def test_session_label_falls_back_when_seed_has_no_word_characters():
         == "agy-run-deadbeef"
     )
 
+
 def test_session_label_sanitizes_only_bounded_seed_prefix(monkeypatch):
     observed = []
 

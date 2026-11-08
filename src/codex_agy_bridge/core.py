@@ -41,9 +41,7 @@ LAST_CONVERSATIONS = AGY_ROOT / "cache" / "last_conversations.json"
 BRAIN_DIR = AGY_ROOT / "brain"
 SETTINGS_PATH = AGY_ROOT / "settings.json"
 
-JSONValue: TypeAlias = (
-    "Mapping[str, Any] | list[Any] | str | int | float | bool | None"
-)
+JSONValue: TypeAlias = "Mapping[str, Any] | list[Any] | str | int | float | bool | None"
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 PRIVATE_STATE_FIELDS = frozenset({"prompt", "command", "completion_marker"})
 
@@ -126,9 +124,7 @@ def workspace_is_trusted(
     if roots is None:
         return None
     resolved = workspace.expanduser().resolve()
-    return any(
-        resolved == root or resolved.is_relative_to(root) for root in roots
-    )
+    return any(resolved == root or resolved.is_relative_to(root) for root in roots)
 
 
 def run_dir(run_id: str, state_root: Path | None = None) -> Path:
@@ -136,9 +132,13 @@ def run_dir(run_id: str, state_root: Path | None = None) -> Path:
 
 
 def goal_dir(goal_id: str, state_root: Path | None = None) -> Path:
-    return (state_root or STATE_ROOT) / "goals" / validate_identifier(
-        goal_id,
-        "goal_id",
+    return (
+        (state_root or STATE_ROOT)
+        / "goals"
+        / validate_identifier(
+            goal_id,
+            "goal_id",
+        )
     )
 
 
@@ -478,9 +478,7 @@ QUOTA_EXHAUSTED_PHRASES = (
     "quota exhausted",
 )
 # "Resets in 162h42m53s." as printed after agy's quota warning (lowercased).
-QUOTA_RESET_RE = re.compile(
-    r"resets in\s+((?=\d)(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)"
-)
+QUOTA_RESET_RE = re.compile(r"resets in\s+((?=\d)(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)")
 # Provider health statuses after which the agent cannot make progress until
 # an operator acts, so a live Run is failed rather than left "running".
 FATAL_PROVIDER_STATUSES = frozenset({"quota_exhausted"})

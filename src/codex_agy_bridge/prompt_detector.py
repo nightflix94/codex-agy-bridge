@@ -268,11 +268,7 @@ def _candidate_from_text(source: SourceName, text: str) -> PromptCandidate | Non
     # caller sees the question itself rather than whichever fragment happens to
     # be longest.
     trust_match = next(
-        (
-            found
-            for regex in TRUST_REGEXES
-            if (found := regex.search(text)) is not None
-        ),
+        (found for regex in TRUST_REGEXES if (found := regex.search(text)) is not None),
         None,
     )
     if trust_match is not None:

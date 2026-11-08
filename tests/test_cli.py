@@ -38,9 +38,7 @@ def completed(stdout: str = "", stderr: str = "", returncode: int = 0):
 def test_cli_discovers_version_models_plugins_and_capabilities(monkeypatch):
     outputs = {
         ("agy", "--version"): completed("1.0.8\n"),
-        ("agy", "--help"): completed(
-            "--sandbox\n--add-dir\n--prompt-interactive\n"
-        ),
+        ("agy", "--help"): completed("--sandbox\n--add-dir\n--prompt-interactive\n"),
         ("agy", "models"): completed(MODEL_LISTING),
         ("agy", "plugin", "list"): completed("alpha\nenabled beta\n"),
     }
@@ -86,8 +84,7 @@ def test_cli_authentication_status_rejects_cached_models_without_runtime_token(
         log_path = command[command.index("--log-file") + 1]
         with open(log_path, "w", encoding="utf-8") as handle:
             handle.write(
-                "error getting token source: "
-                "You are not logged into Antigravity.\n"
+                "error getting token source: You are not logged into Antigravity.\n"
             )
         return completed("Model A\n")
 

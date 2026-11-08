@@ -11,9 +11,7 @@ from codex_agy_bridge import terminal
 
 def test_strip_control_sequences_removes_extended_terminal_commands():
     unsafe = (
-        "before\x1b]0;multi\nline title\x1b\\"
-        "middle\x1b_Gpayload\x1b\\"
-        "after\x9b2J\x07"
+        "before\x1b]0;multi\nline title\x1b\\middle\x1b_Gpayload\x1b\\after\x9b2J\x07"
     )
 
     assert terminal.strip_control_sequences(unsafe) == "beforemiddleafter"
@@ -40,8 +38,10 @@ def test_terminal_launch_owns_tmux_setup(monkeypatch, tmp_path):
     monkeypatch.setattr(
         terminal.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     terminal.launch(
@@ -75,15 +75,15 @@ def test_terminal_launch_owns_tmux_setup(monkeypatch, tmp_path):
     assert calls[1][0][:5] == ["tmux", "pipe-pane", "-o", "-t", "agy-target"]
 
 
-def test_terminal_launch_can_gate_child_for_supervisor_readiness(
-    monkeypatch, tmp_path
-):
+def test_terminal_launch_can_gate_child_for_supervisor_readiness(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
         terminal.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     terminal.launch(
@@ -148,8 +148,10 @@ def test_terminal_launch_passes_bridge_environment_to_tmux_session(
     monkeypatch.setattr(
         terminal.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     terminal.launch(
@@ -262,8 +264,10 @@ def test_terminal_attach_opens_terminal_app(monkeypatch):
     monkeypatch.setattr(
         terminal.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     terminal.attach("agy-target", check=True)
@@ -284,8 +288,10 @@ def test_terminal_attach_still_opens_when_auto_attach_is_disabled(monkeypatch):
     monkeypatch.setattr(
         terminal.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     terminal.attach("agy-target", check=True)
@@ -321,8 +327,10 @@ def test_terminal_attach_escapes_session_for_shell_and_applescript(monkeypatch):
     monkeypatch.setattr(
         terminal.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     terminal.attach('agy-target"; say "oops', check=True)
@@ -352,8 +360,10 @@ def test_terminal_send_text_targets_tmux_session(monkeypatch):
     monkeypatch.setattr(
         terminal.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     terminal.send_text("agy-target", "yes\nsecond line")
@@ -426,8 +436,10 @@ def _launch_capturing(monkeypatch, tmp_path):
     monkeypatch.setattr(
         terminal.subprocess,
         "run",
-        lambda command, **kwargs: calls.append((command, kwargs))
-        or subprocess.CompletedProcess(command, 0, stdout="", stderr=""),
+        lambda command, **kwargs: (
+            calls.append((command, kwargs))
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
     terminal.launch(
         "agy-target",

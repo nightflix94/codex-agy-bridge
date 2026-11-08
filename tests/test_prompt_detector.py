@@ -56,8 +56,7 @@ def test_detector_keeps_stability_when_only_surrounding_text_changes(tmp_path):
     detector = PromptDetector(tmp_path, clock=clock)
 
     assert (
-        detector.inspect(transcript_records=[{"content": "spinner\nContinue?"}])
-        is None
+        detector.inspect(transcript_records=[{"content": "spinner\nContinue?"}]) is None
     )
     clock.advance(0.6)
     event = detector.inspect(

@@ -20,12 +20,15 @@ def test_custom_exceptions_inheritance():
     assert issubclass(ConcurrencyLimitExceeded, BridgeError)
     assert issubclass(ConcurrencyLimitExceeded, RuntimeError)
 
+
 def test_load_state_raises_run_not_found():
     with pytest.raises(RunNotFoundError):
         core.load_state("non_existent_run_id_12345")
 
+
 def test_create_run_raises_workspace_access_error(tmp_path):
     from codex_agy_bridge import orchestration
+
     with pytest.raises(WorkspaceAccessError):
         orchestration.create_run(
             prompt="Hello",
@@ -33,6 +36,7 @@ def test_create_run_raises_workspace_access_error(tmp_path):
             timeout_seconds=900,
             conversation_id=None,
         )
+
 
 def test_create_run_raises_concurrency_limit_exceeded(monkeypatch, tmp_path):
     from codex_agy_bridge import orchestration

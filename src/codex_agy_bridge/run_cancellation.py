@@ -166,7 +166,8 @@ class RunCanceler:
             and isinstance(run_id, str)
             and (
                 session.endswith(run_id[-8:])
-                or not state.get("runner_pid") and not state.get("agy_pid")
+                or not state.get("runner_pid")
+                and not state.get("agy_pid")
             )
         )
 

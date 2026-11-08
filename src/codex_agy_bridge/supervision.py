@@ -143,9 +143,7 @@ class RunSupervisor:
         )
         self.done_response_step_index: int | None = None
         self.done_response_seen_at: float | None = None
-        self.effective_model_check: str | None = self.state.get(
-            "effective_model_check"
-        )
+        self.effective_model_check: str | None = self.state.get("effective_model_check")
         self.next_fatal_provider_check_at = 0.0
         self.prompt_detector = PromptDetector(
             self.directory,
@@ -169,9 +167,7 @@ class RunSupervisor:
         """
         with suppress(Exception):
             detail = " ".join(
-                f"{key}={value}"
-                for key, value in fields.items()
-                if value is not None
+                f"{key}={value}" for key, value in fields.items() if value is not None
             )
             stamp = datetime.now(UTC).isoformat()
             print(
@@ -396,7 +392,8 @@ class RunSupervisor:
                 self._log(
                     "completion_accepted",
                     evidence=self.completion_source,
-                    marker="present" if marker and marker in (response or "")
+                    marker="present"
+                    if marker and marker in (response or "")
                     else "absent",
                 )
                 status = self._finish(

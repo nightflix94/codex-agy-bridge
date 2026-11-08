@@ -133,8 +133,8 @@ def test_run_request_normalizes_expected_file_inside_workspace(tmp_path):
     assert request.expected_file == str(expected.resolve())
     assert state["expected_file"] == str(expected.resolve())
     assert f"Required output file: {expected.resolve()}" in state["prompt"]
-    assert "Finish only after that exact file exists and is non-empty" in (
-        state["prompt"]
+    assert (
+        "Finish only after that exact file exists and is non-empty" in (state["prompt"])
     )
 
 

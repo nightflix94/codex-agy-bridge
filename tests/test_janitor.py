@@ -200,9 +200,7 @@ def test_janitor_preserves_fresh_pidless_queued_run(tmp_path):
         {
             "run_id": run_id,
             "status": "queued",
-            "created_at": (
-                datetime.now(UTC) - dt.timedelta(seconds=90)
-            ).isoformat(),
+            "created_at": (datetime.now(UTC) - dt.timedelta(seconds=90)).isoformat(),
             "runner_pid": None,
             "agy_pid": None,
         },

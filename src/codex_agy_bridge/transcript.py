@@ -56,9 +56,7 @@ def conversation_from_log(log_path: Path) -> str | None:
             head = handle.read(CONVERSATION_LOG_SCAN_BYTES)
     except OSError:
         return None
-    found = set(
-        CREATED_CONVERSATION_RE.findall(head.decode("utf-8", errors="replace"))
-    )
+    found = set(CREATED_CONVERSATION_RE.findall(head.decode("utf-8", errors="replace")))
     if len(found) != 1:
         return None
     try:

@@ -286,8 +286,10 @@ def test_create_run_opens_visible_auth_session_when_cli_requires_sign_in(
 
     monkeypatch.setattr(
         "codex_agy_bridge._orchestrator.auth_flow.start_visible_auth_session",
-        lambda **kwargs: opened.append(kwargs)
-        or {"tmux_session": "agy-auth-test", "opened": True, "reused": False},
+        lambda **kwargs: (
+            opened.append(kwargs)
+            or {"tmux_session": "agy-auth-test", "opened": True, "reused": False}
+        ),
     )
     orchestrator = RunnerOrchestrator(
         state_root=tmp_path / "state",
@@ -303,8 +305,9 @@ def test_create_run_opens_visible_auth_session_when_cli_requires_sign_in(
         )
 
     assert error.value.payload["status"] == "auth_required"
-    assert "Authenticate in the visible agy CLI session" in (
-        error.value.payload["warning"]
+    assert (
+        "Authenticate in the visible agy CLI session"
+        in (error.value.payload["warning"])
     )
     assert error.value.payload["auth_session"] == {
         "tmux_session": "agy-auth-test",
@@ -609,9 +612,7 @@ def test_login_refresh_closes_auth_session_after_sign_in(monkeypatch, tmp_path):
         (["duplicate", "duplicate"], "duplicate"),
     ],
 )
-def test_added_directories_are_validated(
-    tmp_path, monkeypatch, directories, message
-):
+def test_added_directories_are_validated(tmp_path, monkeypatch, directories, message):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     duplicate = tmp_path / "duplicate"
@@ -1959,9 +1960,7 @@ class ReusedPidProcessManager(ProcessManager):
         return True
 
     def command_line(self, pid):
-        return (
-            "python -m codex_agy_bridge.runner --state-root /tmp/state other-run"
-        )
+        return "python -m codex_agy_bridge.runner --state-root /tmp/state other-run"
 
     def killpg(self, gpid, sig):
         self.signals.append((gpid, sig))
@@ -2158,6 +2157,7 @@ def test_status_projects_attention_without_changing_lifecycle(tmp_path):
             "runner_pid": 101,
         },
     )
+
     class AliveProcessManager(ProcessManager):
         def spawn(self, args, cwd, stdout, stderr):
             raise AssertionError("spawn is not expected")
@@ -2691,9 +2691,7 @@ def test_goal_status_includes_completed_target_result_metadata(tmp_path):
         "preview": "target result",
         "total_bytes": 13,
         "complete": True,
-        "artifact_path": str(
-            tmp_path / "state" / "runs" / run_id / "final-result.txt"
-        ),
+        "artifact_path": str(tmp_path / "state" / "runs" / run_id / "final-result.txt"),
         "read_with": "agy_run_result",
         "result_source": "unknown",
         "result_is_verbatim": False,

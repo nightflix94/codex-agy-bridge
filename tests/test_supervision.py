@@ -405,9 +405,7 @@ def test_supervisor_late_completion_cannot_publish_after_cancellation(
     }
 
 
-def test_supervisor_emits_progress_stalled_after_transcript_idle(
-    monkeypatch, tmp_path
-):
+def test_supervisor_emits_progress_stalled_after_transcript_idle(monkeypatch, tmp_path):
     state = {
         "run_id": "run-1",
         "workspace": str(tmp_path),
@@ -468,9 +466,7 @@ def test_supervisor_emits_progress_stalled_after_transcript_idle(
     assert stalled_events[0]["observed"]["latest_transcript_step"] == 7
     assert stalled_events[0]["observed"]["idle_seconds"] == 31
     assert stalled_events[1]["observed"]["stalled_for_seconds"] == 62
-    assert stalled_events[0]["observed"]["suggested_next_tool"] == (
-        "agy_run_observe"
-    )
+    assert stalled_events[0]["observed"]["suggested_next_tool"] == ("agy_run_observe")
     assert stalled_events[0]["observed"]["suggested_next_arguments"] == {
         "run_ids": ["run-1"],
         "view": "terminal",
@@ -561,8 +557,6 @@ def test_interactive_waiting_for_user_pauses_stale_watchdog(monkeypatch, tmp_pat
 
     assert not supervisor._observe_stale_confirmation()
     assert session_events.read_events(tmp_path) == []
-
-
 
 
 def test_supervisor_classifies_nonzero_cli_exit(monkeypatch, tmp_path):
@@ -746,9 +740,8 @@ def test_supervisor_resets_completion_stability_for_changed_response(
     assert supervisor._completion_is_stable("changed DONE_MARKER")
     assert supervisor.marker_seen_at != first_seen_at
 
-def test_supervisor_treats_explicit_completion_marker_as_stable(
-    monkeypatch, tmp_path
-):
+
+def test_supervisor_treats_explicit_completion_marker_as_stable(monkeypatch, tmp_path):
     state = {
         "run_id": "run-1",
         "workspace": str(tmp_path),
@@ -1323,10 +1316,7 @@ def test_supervisor_rejects_a_planner_block_truncated_before_its_tool_call(
         "completion_marker": "DONE_MARKER",
         "prompt": "do work",
     }
-    partial = (
-        "I will write the test file "
-        "`/Users/example/workspace/test/format"
-    )
+    partial = "I will write the test file `/Users/example/workspace/test/format"
     clock = FakeClock(100.0)
 
     class FakeHarvester:
@@ -1759,9 +1749,7 @@ def test_supervisor_launch_does_not_open_headless_terminal(monkeypatch, tmp_path
     assert attached == []
 
 
-def test_supervisor_launch_rejects_invisible_terminal_failure(
-    monkeypatch, tmp_path
-):
+def test_supervisor_launch_rejects_invisible_terminal_failure(monkeypatch, tmp_path):
     state = {
         "run_id": "run-1",
         "workspace": str(tmp_path),
@@ -2088,9 +2076,7 @@ def test_reflowed_task_echo_is_not_a_completion_marker():
     )
 
 
-def test_supervisor_reports_a_conversation_that_never_correlates(
-    monkeypatch, tmp_path
-):
+def test_supervisor_reports_a_conversation_that_never_correlates(monkeypatch, tmp_path):
     """Correlation failure must not be silent.
 
     Every other signal - completion, result, progress stall - is derived from
@@ -2160,9 +2146,7 @@ def test_supervisor_stops_reporting_once_the_conversation_correlates(
     ]
 
 
-def test_failed_terminal_attach_leaves_a_foreground_run_detached(
-    monkeypatch, tmp_path
-):
+def test_failed_terminal_attach_leaves_a_foreground_run_detached(monkeypatch, tmp_path):
     """A cosmetic window failing to open must not destroy the Run.
 
     osascript can time out transiently. Killing a Run over it loses work that
@@ -2556,8 +2540,13 @@ def test_an_uncontested_claim_is_not_reported(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         "codex_agy_bridge.supervision.TranscriptHarvester",
         lambda _conversation_id, _path: type(
-            "H", (), {"fast_forward": lambda self: -1, "poll": lambda self: [],
-                      "latest_response": None}
+            "H",
+            (),
+            {
+                "fast_forward": lambda self: -1,
+                "poll": lambda self: [],
+                "latest_response": None,
+            },
         )(),
     )
     monkeypatch.setattr(
@@ -2645,9 +2634,7 @@ def test_an_undecidable_claim_does_not_adopt_the_conversation(
     def unavailable(*_args, **_kwargs):
         raise TimeoutError("start.lock is held")
 
-    monkeypatch.setattr(
-        runner, "claim_conversation", unavailable, raising=False
-    )
+    monkeypatch.setattr(runner, "claim_conversation", unavailable, raising=False)
     monkeypatch.setattr(
         "codex_agy_bridge.supervision.TranscriptHarvester",
         lambda cid, path: built.append(cid),
@@ -2687,9 +2674,15 @@ def test_an_undecidable_claim_is_retried_unlike_a_refusal(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "conversation_from_log", lambda _path: "conv-a")
     monkeypatch.setattr(
         "codex_agy_bridge.supervision.TranscriptHarvester",
-        lambda cid, path: type("H", (), {"fast_forward": lambda self: -1,
-                                         "poll": lambda self: [],
-                                         "latest_response": None})(),
+        lambda cid, path: type(
+            "H",
+            (),
+            {
+                "fast_forward": lambda self: -1,
+                "poll": lambda self: [],
+                "latest_response": None,
+            },
+        )(),
     )
 
     def flaky(*_args, **_kwargs):
@@ -2771,8 +2764,7 @@ def _echoed_legacy_packet(marker: str) -> str:
             "  do work",
             "",
             "  Completion marker:",
-            "  Strongly suggested: first write the full and final response the "
-            "calling",
+            "  Strongly suggested: first write the full and final response the calling",
             "  harness should show the user, then print this marker as the last "
             "line only",
             "  after all requested files and edits are complete:",

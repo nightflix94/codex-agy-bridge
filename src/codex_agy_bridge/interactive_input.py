@@ -98,9 +98,7 @@ def record_mcp_input(
             directory / "interactive-input-events.jsonl"
         ) as handle,
     ):
-        handle.write(
-            (json.dumps(event, separators=(",", ":")) + "\n").encode("utf-8")
-        )
+        handle.write((json.dumps(event, separators=(",", ":")) + "\n").encode("utf-8"))
 
 
 def _load(directory: Path) -> list[str]:

@@ -16,6 +16,7 @@ class MockProcess:
     def __init__(self, pid=9999):
         self.pid = pid
 
+
 class MockProcessManager(ProcessManager):
     def __init__(self):
         self.spawned = []
@@ -23,13 +24,9 @@ class MockProcessManager(ProcessManager):
 
     def spawn(self, args: list[str], cwd: str, stdout: any, stderr: any) -> any:
         proc = MockProcess()
-        self.spawned.append({
-            "args": args,
-            "cwd": cwd,
-            "stdout": stdout,
-            "stderr": stderr,
-            "proc": proc
-        })
+        self.spawned.append(
+            {"args": args, "cwd": cwd, "stdout": stdout, "stderr": stderr, "proc": proc}
+        )
         self.alive_pids.add(proc.pid)
         return proc
 
@@ -43,6 +40,7 @@ class MockProcessManager(ProcessManager):
     def kill(self, pid: int, sig: int) -> None:
         if pid in self.alive_pids:
             self.alive_pids.remove(pid)
+
 
 def allow_visible_cli(monkeypatch):
     monkeypatch.setattr(
@@ -58,12 +56,14 @@ def allow_visible_cli(monkeypatch):
         )(),
     )
 
+
 def test_orchestrator_initialization():
     state_root = Path("/dummy/state")
     pm = MockProcessManager()
     orch = RunnerOrchestrator(state_root=state_root, process_manager=pm)
     assert orch.state_root == state_root
     assert orch.process_manager == pm
+
 
 def test_orchestrator_create_run_spawns_process(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
@@ -292,8 +292,10 @@ def test_orchestrator_rejects_blank_conversation_id_before_spawn(tmp_path):
 
     assert pm.spawned == []
 
+
 def test_active_run_registry_lifecycle(tmp_path, monkeypatch):
     from codex_agy_bridge import core
+
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     state_root = tmp_path / "state"
