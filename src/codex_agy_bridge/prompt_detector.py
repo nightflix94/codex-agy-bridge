@@ -202,16 +202,23 @@ class PromptDetector:
             return candidate
 
         terminal_text = read_tail_text(self.run_dir / "terminal.log")
-        candidate = _candidate_from_text("terminal_log", terminal_text)
-        if candidate is not None:
-            return candidate
-
+        logged = _candidate_from_text("terminal_log", terminal_text)
         if not self.tmux_session or self.capture_timeout_seconds <= 0:
-            return None
-        live_text = terminal.capture_pane(
-            self.tmux_session,
-            timeout_seconds=self.capture_timeout_seconds,
-        )
+            return logged
+        # terminal.log is history: a dialog agy drew and then dismissed on
+        # its own (the startup trust prompt does this once sign-in completes
+        # under a trusted parent) stays in it long after it left the screen.
+        # The visible pane is the current screen, so when it can be read it
+        # decides; the log only stands in when it cannot.
+        try:
+            live_text = terminal.capture_pane(
+                self.tmux_session,
+                timeout_seconds=self.capture_timeout_seconds,
+            )
+        except terminal.TmuxCommandError:
+            if logged is not None:
+                return logged
+            raise
         return _candidate_from_text("live_pane", live_text)
 
 

@@ -105,14 +105,34 @@ def test_detector_prefers_transcript_over_terminal_and_capture(tmp_path, monkeyp
     assert captured == []
 
 
-def test_detector_uses_terminal_log_before_live_capture(tmp_path, monkeypatch):
+def test_live_screen_decides_over_terminal_log_history(tmp_path, monkeypatch):
+    """terminal.log is history; the pane shows what is on screen now."""
     clock = FakeClock()
     (tmp_path / "terminal.log").write_text("Continue?", encoding="utf-8")
     monkeypatch.setattr(
         terminal,
         "capture_pane",
-        lambda _session: "Approve command?",
+        lambda _session, **_kwargs: "Approve command?",
     )
+    detector = PromptDetector(tmp_path, tmux_session="agy-run", clock=clock)
+
+    detector.inspect()
+    clock.advance(1.0)
+    event = detector.inspect()
+
+    assert event is not None
+    assert event.source == "live_pane"
+    assert event.attention["prompt"] == "Approve command?"
+
+
+def test_terminal_log_stands_in_when_the_screen_cannot_be_read(tmp_path, monkeypatch):
+    clock = FakeClock()
+    (tmp_path / "terminal.log").write_text("Continue?", encoding="utf-8")
+
+    def unreadable(_session, **_kwargs):
+        raise terminal.TmuxCommandError(command=["tmux"], reason="failed")
+
+    monkeypatch.setattr(terminal, "capture_pane", unreadable)
     detector = PromptDetector(tmp_path, tmux_session="agy-run", clock=clock)
 
     detector.inspect()
@@ -122,6 +142,54 @@ def test_detector_uses_terminal_log_before_live_capture(tmp_path, monkeypatch):
     assert event is not None
     assert event.source == "terminal_log"
     assert event.attention["prompt"] == "Continue?"
+
+
+def test_trust_dialog_agy_dismissed_itself_clears_attention(tmp_path, monkeypatch):
+    """Regression from a real Run: agy drew its trust dialog before sign-in,
+    then proceeded on its own under a trusted parent. The dialog stayed in
+    terminal.log, so the Run read as awaiting_user while it worked."""
+    clock = FakeClock()
+    (tmp_path / "terminal.log").write_text(
+        "/Users/someone/project\n\nDo you trust the contents of this project?\n"
+        "\nAntigravity CLI requires permission to read, edit, and execute files "
+        "here.\n\n> Yes, I trust this folder\n  No, exit\n",
+        encoding="utf-8",
+    )
+    screen = {"text": "Do you trust the contents of this project?\n> Yes"}
+    monkeypatch.setattr(
+        terminal, "capture_pane", lambda _session, **_kwargs: screen["text"]
+    )
+    detector = PromptDetector(tmp_path, tmux_session="agy-run", clock=clock)
+
+    detector.inspect()
+    clock.advance(1.0)
+    raised = detector.inspect()
+    assert raised is not None
+    assert raised.kind == "needs_attention"
+    assert raised.attention["reason"] == "workspace_trust_required"
+
+    screen["text"] = "Working...\nGemini 3.8 Flash \u00b7 high"
+    cleared = detector.inspect()
+
+    assert cleared is not None
+    assert cleared.kind == "attention_cleared"
+
+
+def test_trust_dialog_only_in_history_never_raises_attention(tmp_path, monkeypatch):
+    clock = FakeClock()
+    (tmp_path / "terminal.log").write_text(
+        "Do you trust the contents of this project?\n> Yes, I trust this folder\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        terminal, "capture_pane", lambda _session, **_kwargs: "Editing files..."
+    )
+    detector = PromptDetector(tmp_path, tmux_session="agy-run", clock=clock)
+
+    detector.inspect()
+    clock.advance(1.0)
+
+    assert detector.inspect() is None
 
 
 def test_detector_falls_back_to_live_capture(tmp_path, monkeypatch):
