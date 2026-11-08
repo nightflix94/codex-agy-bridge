@@ -91,6 +91,10 @@ class RunState(TypedDict, total=False):
     finished_at: str
     return_code: int | None
     interactive_prompt_in_flight: bool
+    # Dedupe key of an on-screen prompt the agent kept working past (agy can
+    # leave its trust dialog drawn on a frame it never repaints); detectors
+    # skip it until the screen shows something else.
+    nonblocking_prompt_key: str | None
     notification_resource_uri: str
     wait_tool: str
     wait_call: ToolCall

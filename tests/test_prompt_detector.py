@@ -145,9 +145,8 @@ def test_terminal_log_stands_in_when_the_screen_cannot_be_read(tmp_path, monkeyp
 
 
 def test_trust_dialog_agy_dismissed_itself_clears_attention(tmp_path, monkeypatch):
-    """Regression from a real Run: agy drew its trust dialog before sign-in,
-    then proceeded on its own under a trusted parent. The dialog stayed in
-    terminal.log, so the Run read as awaiting_user while it worked."""
+    """When the screen moves past a dialog, attention clears even though
+    terminal.log still holds the dialog text."""
     clock = FakeClock()
     (tmp_path / "terminal.log").write_text(
         "/Users/someone/project\n\nDo you trust the contents of this project?\n"
@@ -190,6 +189,132 @@ def test_trust_dialog_only_in_history_never_raises_attention(tmp_path, monkeypat
     clock.advance(1.0)
 
     assert detector.inspect() is None
+
+
+# The last frame agy drew in a real Run: it never repainted this trust
+# dialog while it ran the whole task underneath it.
+FROZEN_TRUST_SCREEN = (
+    "Welcome to the Antigravity CLI. You are currently not signed in.\n\n"
+    "/Users/someone/project\n\nDo you trust the contents of this project?\n\n"
+    "Antigravity CLI requires permission to read, edit, and execute files here."
+    "\n\n> Yes, I trust this folder\n  No, exit\n\n"
+    "  \u2191/\u2193 Navigate \u00b7 enter ConfirmGemini 3.8 Flash \u00b7 high"
+)
+
+
+def _frozen_trust_detector(tmp_path, monkeypatch, clock, **kwargs):
+    screen = {"text": FROZEN_TRUST_SCREEN}
+    monkeypatch.setattr(
+        terminal, "capture_pane", lambda _session, **_kwargs: screen["text"]
+    )
+    detector = PromptDetector(tmp_path, tmux_session="agy-run", clock=clock, **kwargs)
+    return detector, screen
+
+
+def _raise_trust_attention(detector, clock):
+    detector.inspect()
+    clock.advance(1.0)
+    raised = detector.inspect()
+    assert raised is not None
+    assert raised.kind == "needs_attention"
+    return raised
+
+
+def test_agent_work_under_a_frozen_dialog_clears_attention(tmp_path, monkeypatch):
+    """Regression from a real Run: the trust dialog stayed on the live screen
+    for the whole Run while agy recorded fifteen steps of work."""
+    clock = FakeClock()
+    detector, _screen = _frozen_trust_detector(tmp_path, monkeypatch, clock)
+    raised = _raise_trust_attention(detector, clock)
+
+    cleared = detector.inspect(
+        transcript_records=[{"step_index": 1, "type": "PLANNER_RESPONSE"}]
+    )
+
+    assert cleared is not None
+    assert cleared.kind == "attention_cleared"
+    assert detector.nonblocking_dedupe_key == raised.dedupe_key
+    clock.advance(5.0)
+    assert detector.inspect() is None
+    assert detector.inspect() is None
+
+
+def test_user_input_alone_does_not_clear_attention(tmp_path, monkeypatch):
+    clock = FakeClock()
+    detector, _screen = _frozen_trust_detector(tmp_path, monkeypatch, clock)
+    _raise_trust_attention(detector, clock)
+
+    event = detector.inspect(
+        transcript_records=[{"step_index": 0, "type": "USER_INPUT"}]
+    )
+
+    assert event is None
+    assert detector.nonblocking_dedupe_key is None
+
+
+def test_prompt_with_no_agent_work_keeps_attention(tmp_path, monkeypatch):
+    clock = FakeClock()
+    detector, _screen = _frozen_trust_detector(tmp_path, monkeypatch, clock)
+    _raise_trust_attention(detector, clock)
+
+    for _ in range(3):
+        clock.advance(5.0)
+        assert detector.inspect() is None
+    assert detector.nonblocking_dedupe_key is None
+
+
+def test_work_recorded_before_the_prompt_does_not_clear_it(tmp_path, monkeypatch):
+    clock = FakeClock()
+    detector, _screen = _frozen_trust_detector(tmp_path, monkeypatch, clock)
+    detector.inspect(transcript_records=[{"step_index": 4, "type": "PLANNER_RESPONSE"}])
+    clock.advance(1.0)
+    raised = detector.inspect()
+    assert raised is not None
+    assert raised.kind == "needs_attention"
+
+    clock.advance(5.0)
+    assert detector.inspect() is None
+
+
+def test_detector_without_transcript_honors_persisted_nonblocking_key(
+    tmp_path, monkeypatch
+):
+    """The observe snapshot and wait loop build fresh detectors without the
+    transcript; the key the supervisor persisted keeps them from re-raising."""
+    clock = FakeClock()
+    supervisor, _screen = _frozen_trust_detector(tmp_path, monkeypatch, clock)
+    _raise_trust_attention(supervisor, clock)
+    supervisor.inspect(
+        transcript_records=[{"step_index": 1, "type": "PLANNER_RESPONSE"}]
+    )
+
+    fresh = PromptDetector(
+        tmp_path,
+        tmux_session="agy-run",
+        clock=clock,
+        stable_seconds=0.0,
+        nonblocking_dedupe_key=supervisor.nonblocking_dedupe_key,
+    )
+    fresh.inspect()
+
+    assert fresh.inspect() is None
+
+
+def test_prompt_drawn_again_after_screen_changes_raises_attention(
+    tmp_path, monkeypatch
+):
+    clock = FakeClock()
+    detector, screen = _frozen_trust_detector(tmp_path, monkeypatch, clock)
+    _raise_trust_attention(detector, clock)
+    detector.inspect(transcript_records=[{"step_index": 1, "type": "PLANNER_RESPONSE"}])
+
+    screen["text"] = "Working..."
+    assert detector.inspect() is None
+    assert detector.nonblocking_dedupe_key is None
+    screen["text"] = FROZEN_TRUST_SCREEN
+
+    raised = _raise_trust_attention(detector, clock)
+    assert raised.kind == "needs_attention"
 
 
 def test_detector_falls_back_to_live_capture(tmp_path, monkeypatch):

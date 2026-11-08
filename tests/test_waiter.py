@@ -351,3 +351,41 @@ def test_wait_for_runs_attention_wakes_on_unresolved_conversation(tmp_path):
 
     assert result["matched"] is True
     assert result["events"] == [unresolved]
+
+
+def test_wait_for_runs_skips_prompt_the_agent_worked_past(tmp_path):
+    from codex_agy_bridge.prompt_detector import PromptDetector
+
+    state_root = tmp_path / "state"
+    run_dir = core.run_dir("run-1", state_root=state_root)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "terminal.log").write_text(
+        "Do you trust the contents of this project?\n> Yes, I trust this folder\n",
+        encoding="utf-8",
+    )
+    probe = PromptDetector(run_dir, stable_seconds=0.0)
+    probe.inspect()
+    raised = probe.inspect()
+    assert raised is not None
+    core.atomic_write_json(
+        core.state_path("run-1", state_root=state_root),
+        {
+            "run_id": "run-1",
+            "status": "running",
+            "tmux_session": None,
+            "nonblocking_prompt_key": raised.dedupe_key,
+        },
+    )
+    first = session_events.append_event(run_dir, "run_started")
+
+    result = wait_for_runs(
+        {"run-1": run_dir},
+        state_root=state_root,
+        condition="any_attention",
+        after={"run-1": first["event_id"]},
+        timeout_seconds=0.3,
+    )
+
+    assert result["matched"] is False
+    assert result["runs"]["run-1"]["attention"]["required"] is False
+    assert [e["kind"] for e in session_events.read_events(run_dir)] == ["run_started"]

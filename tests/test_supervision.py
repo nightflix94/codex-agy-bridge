@@ -2869,3 +2869,43 @@ def test_echoed_split_packet_does_not_complete(monkeypatch, tmp_path):
     supervisor = _supervisor_over_log(monkeypatch, tmp_path, log)
 
     assert supervisor._terminal_completion_response() is None
+
+
+def test_supervisor_persists_prompt_the_agent_worked_past(monkeypatch, tmp_path):
+    """The supervisor is the only detector that sees the transcript, so it
+    records the non-blocking prompt for the snapshot and wait loop."""
+    from codex_agy_bridge.prompt_detector import PromptDetector
+
+    state = {
+        "run_id": "run-1",
+        "workspace": str(tmp_path),
+        "timeout_seconds": 10,
+        "requested_conversation_id": "conversation-1",
+        "prompt": "edit greet.py",
+    }
+    updates = []
+    monkeypatch.setattr(runner, "load_state", lambda _run_id: state)
+    monkeypatch.setattr(runner, "run_dir", lambda _run_id: tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "update_state",
+        lambda _run_id, **changes: updates.append(changes),
+    )
+    (tmp_path / "terminal.log").write_text(
+        "Do you trust the contents of this project?\n> Yes, I trust this folder\n",
+        encoding="utf-8",
+    )
+    clock = FakeClock()
+    supervisor = RunSupervisor("run-1")
+    supervisor.prompt_detector = PromptDetector(tmp_path, clock=clock)
+
+    supervisor._observe_prompt([])
+    clock.advance(1.0)
+    supervisor._observe_prompt([])
+    supervisor._observe_prompt([{"step_index": 2, "type": "PLANNER_RESPONSE"}])
+
+    kinds = [event["kind"] for event in session_events.read_events(tmp_path)]
+    assert kinds == ["needs_attention", "attention_cleared"]
+    key = supervisor.prompt_detector.nonblocking_dedupe_key
+    assert key is not None
+    assert updates == [{"nonblocking_prompt_key": key}]

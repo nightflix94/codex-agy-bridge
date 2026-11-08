@@ -98,6 +98,7 @@ class PromptDetector:
         stable_seconds: float = 0.5,
         capture_timeout_seconds: float = terminal.DEFAULT_TMUX_TIMEOUT_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        nonblocking_dedupe_key: str | None = None,
     ) -> None:
         self.run_dir = run_dir
         self.tmux_session = tmux_session
@@ -108,6 +109,14 @@ class PromptDetector:
         self._candidate_seen_at = 0.0
         self._active_dedupe_key: str | None = None
         self._last_emitted_dedupe_key: str | None = None
+        # A prompt the agent kept working past. agy can leave its startup
+        # trust dialog drawn on a screen it never repaints while it runs the
+        # task, so the screen alone cannot tell a frozen frame from a prompt
+        # that blocks. Callers persist this key so detectors that never see
+        # the transcript (the observe snapshot, the wait loop) agree.
+        self.nonblocking_dedupe_key = nonblocking_dedupe_key
+        self._latest_agent_step = -1
+        self._agent_step_at_attention = -1
 
     def inspect(
         self,
@@ -115,12 +124,33 @@ class PromptDetector:
         transcript_records: Sequence[dict[str, Any]] | None = None,
     ) -> PromptDetectionEvent | None:
         """Inspect sources in priority order and return a state transition."""
+        records = transcript_records or []
+        self._latest_agent_step = max(
+            self._latest_agent_step, _latest_agent_step(records)
+        )
         unavailable = None
         try:
-            candidate = self._candidate_from_sources(transcript_records or [])
+            candidate = self._candidate_from_sources(records)
         except terminal.TmuxCommandError as error:
             candidate = None
             unavailable = error
+        if unavailable is None and (
+            candidate is None or candidate.dedupe_key != self.nonblocking_dedupe_key
+        ):
+            # The frame changed, so a later identical prompt is a new one.
+            self.nonblocking_dedupe_key = None
+        if (
+            candidate is not None
+            and candidate.dedupe_key == self._active_dedupe_key
+            and self._latest_agent_step > self._agent_step_at_attention
+        ):
+            # agy cannot be waiting on a human while it records new work.
+            self.nonblocking_dedupe_key = candidate.dedupe_key
+        if (
+            candidate is not None
+            and candidate.dedupe_key == self.nonblocking_dedupe_key
+        ):
+            candidate = None
         if candidate is None:
             self._candidate = None
             self._candidate_seen_at = 0.0
@@ -179,6 +209,7 @@ class PromptDetector:
             return None
         self._active_dedupe_key = candidate.dedupe_key
         self._last_emitted_dedupe_key = candidate.dedupe_key
+        self._agent_step_at_attention = self._latest_agent_step
         return PromptDetectionEvent(
             kind="needs_attention",
             source=candidate.source,
@@ -205,11 +236,11 @@ class PromptDetector:
         logged = _candidate_from_text("terminal_log", terminal_text)
         if not self.tmux_session or self.capture_timeout_seconds <= 0:
             return logged
-        # terminal.log is history: a dialog agy drew and then dismissed on
-        # its own (the startup trust prompt does this once sign-in completes
-        # under a trusted parent) stays in it long after it left the screen.
+        # terminal.log is history: a prompt that left the screen stays in it.
         # The visible pane is the current screen, so when it can be read it
-        # decides; the log only stands in when it cannot.
+        # decides; the log only stands in when it cannot. (A prompt can also
+        # stay drawn on a frozen screen; inspect() handles that through
+        # transcript progress.)
         try:
             live_text = terminal.capture_pane(
                 self.tmux_session,
@@ -220,6 +251,18 @@ class PromptDetector:
                 return logged
             raise
         return _candidate_from_text("live_pane", live_text)
+
+
+def _latest_agent_step(records: Sequence[dict[str, Any]]) -> int:
+    """Return the newest step agy itself produced; user input does not count."""
+    steps = [
+        record["step_index"]
+        for record in records
+        if isinstance(record.get("step_index"), int)
+        and not isinstance(record.get("step_index"), bool)
+        and record.get("type") != "USER_INPUT"
+    ]
+    return max(steps, default=-1)
 
 
 def _records_text(records: Sequence[dict[str, Any]]) -> str:

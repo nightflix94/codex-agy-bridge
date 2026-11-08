@@ -207,6 +207,7 @@ def _detected_attention(
         tmux_session=state.get("tmux_session"),
         stable_seconds=0.0,
         capture_timeout_seconds=capture_timeout_seconds,
+        nonblocking_dedupe_key=state.get("nonblocking_prompt_key"),
     )
     detector.inspect()
     event = detector.inspect()
@@ -947,6 +948,7 @@ def _prompt_detectors(
             tmux_session=state.get("tmux_session"),
             stable_seconds=0.0,
             capture_timeout_seconds=capture_timeout_seconds,
+            nonblocking_dedupe_key=state.get("nonblocking_prompt_key"),
         )
     return detectors
 

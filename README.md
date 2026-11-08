@@ -306,6 +306,16 @@ of `completed`. Set it to `false` for read-only or question runs. Review tools,
 `agy_start_with_expected_file`, and goal targets do not expect edits. A
 non-git workspace cannot be checked and is not failed.
 
+**Attention.** A run shows `awaiting_user` only for a prompt that is on the
+live tmux screen now; `terminal.log` is history and only stands in when the
+screen cannot be read. `agy` can also leave its startup trust dialog drawn on a
+screen it never repaints while it runs the task underneath. Once the transcript
+records new agent steps after a prompt appeared, the bridge emits
+`attention_cleared`, records the prompt in run state as
+`nonblocking_prompt_key`, and does not raise it again until the screen shows
+something else. A prompt that really blocks stops the transcript, so it stays
+raised.
+
 **Report checks.** `agy_run_result` also returns:
 
 - `warnings`: includes `{"kind": "prompt_fragment", "overlap": ...}` when at

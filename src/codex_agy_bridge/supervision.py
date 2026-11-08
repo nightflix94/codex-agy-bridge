@@ -153,6 +153,7 @@ class RunSupervisor:
                 else None
             ),
             clock=time.monotonic,
+            nonblocking_dedupe_key=self.state.get("nonblocking_prompt_key"),
         )
 
     def _log(self, event: str, **fields: object) -> None:
@@ -909,6 +910,10 @@ class RunSupervisor:
 
     def _observe_prompt(self, records: list[dict[str, object]]) -> None:
         event = self.prompt_detector.inspect(transcript_records=records)
+        nonblocking = self.prompt_detector.nonblocking_dedupe_key
+        if nonblocking != self.state.get("nonblocking_prompt_key"):
+            runtime.update_state(self.run_id, nonblocking_prompt_key=nonblocking)
+            self.state["nonblocking_prompt_key"] = nonblocking
         if event is None or event.kind == "source_unavailable":
             return
         observed = {"activity_state": event.activity_state}
