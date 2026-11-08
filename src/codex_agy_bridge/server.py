@@ -14,7 +14,6 @@ from codex_agy_bridge.core import STATE_ROOT, ensure_private_directory, public_s
 from codex_agy_bridge.exceptions import AuthenticationRequiredError
 from codex_agy_bridge.lifecycle import register_server_instance
 
-DEFAULT_MODEL = orchestration.DEFAULT_MODEL
 DEFAULT_WAIT_TIMEOUT_SECONDS = orchestration.DEFAULT_WAIT_TIMEOUT_SECONDS
 
 
@@ -103,7 +102,7 @@ def create_run(
     timeout_seconds: int,
     conversation_id: str | None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
     goal_id: str | None = None,
@@ -111,6 +110,7 @@ def create_run(
     expected_file: str | None = None,
     stale_timeout_seconds: int = 300,
     stale_action: str = "notify",
+    expect_edits: bool = False,
 ) -> dict[str, Any]:
     """Compatibility interface for callers predating the orchestration module."""
     return cast(
@@ -129,6 +129,7 @@ def create_run(
             expected_file=expected_file,
             stale_timeout_seconds=stale_timeout_seconds,
             stale_action=stale_action,
+            expect_edits=expect_edits,
         ),
     )
 
@@ -141,12 +142,13 @@ def agy_run_start(
     conversation_id: str | None = None,
     mode: str = "task",
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
     expected_file: str | None = None,
     stale_timeout_seconds: int = 300,
     stale_action: str = "notify",
+    expect_edits: bool | None = None,
 ) -> dict[str, Any]:
     """Start or continue one foreground Antigravity Run.
 
@@ -161,6 +163,12 @@ def agy_run_start(
     stale_action controls what happens after stale_timeout_seconds without
     transcript, terminal, artifact, process-tree, or CPU activity: notify (the
     default), cancel, or ignore.
+    model is a model ID (or exact display name) from agy_admin(action="models");
+    omitted, it resolves AGY_BRIDGE_DEFAULT_MODEL or the built-in Flash default
+    against that list. Unknown models are rejected, never passed to agy.
+    expect_edits (default true for mode="task", false for mode="interactive")
+    fails a Run that finishes without changing any file in its git workspace,
+    with failure_reason="no_edits". Set it false for read-only or question runs.
     """
     if mode not in {"task", "interactive"}:
         raise ValueError("mode must be 'task' or 'interactive'")
@@ -178,6 +186,7 @@ def agy_run_start(
         "additional_directories": additional_directories,
         "stale_timeout_seconds": stale_timeout_seconds,
         "stale_action": stale_action,
+        "expect_edits": mode == "task" if expect_edits is None else expect_edits,
     }
     if mode == "interactive":
         kwargs.update(
@@ -202,7 +211,7 @@ def agy_start_with_expected_file(
     timeout_seconds: int = 900,
     conversation_id: str | None = None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
     stale_timeout_seconds: int = 300,
@@ -377,7 +386,7 @@ def agy_review_commit(
     timeout_seconds: int = 900,
     conversation_id: str | None = None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -415,7 +424,7 @@ def agy_review_branch(
     timeout_seconds: int = 900,
     conversation_id: str | None = None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -453,7 +462,7 @@ def agy_review_files(
     timeout_seconds: int = 900,
     conversation_id: str | None = None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -494,7 +503,7 @@ def agy_goal(
     prompt: str | None = None,
     timeout_seconds: int = 900,
     max_parallel: StrictInt = 2,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool | None = None,
     additional_directories: list[str] | None = None,
     dangerously_skip_permissions: bool | None = True,

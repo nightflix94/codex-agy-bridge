@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from codex_agy_bridge import core
+from codex_agy_bridge.cli import ModelEntry
 from codex_agy_bridge.exceptions import RunNotFoundError
 from codex_agy_bridge.run_request import normalize_additional_directories
 from codex_agy_bridge.state import ACTIVE_STATUSES, GoalState, RunState
@@ -47,8 +48,10 @@ class GoalObservation(Protocol):
     def result_metadata(self, state: RunState) -> dict[str, Any] | None: ...
 
 
-class ModelValidator(Protocol):
-    def validate_model(self, model: str) -> None: ...
+class ModelResolver(Protocol):
+    def resolve_model(self, name: str) -> ModelEntry: ...
+
+    def default_model(self) -> ModelEntry: ...
 
 
 class GoalScheduler:
@@ -61,8 +64,7 @@ class GoalScheduler:
         store: GoalSchedulerStore,
         launch_run: GoalRunLauncher,
         observation: GoalObservation,
-        cli: ModelValidator,
-        default_model: str,
+        cli: ModelResolver,
         max_parallel_limit: int,
     ) -> None:
         self.state_root = state_root
@@ -70,7 +72,6 @@ class GoalScheduler:
         self.launch_run = launch_run
         self.observation = observation
         self.cli = cli
-        self.default_model = default_model
         self.max_parallel_limit = max_parallel_limit
 
     def load(self, goal_id: str) -> GoalState:
@@ -103,11 +104,9 @@ class GoalScheduler:
                 "max_parallel must be an integer between 1 and "
                 f"{self.max_parallel_limit}"
             )
-        resolved_model = self.default_model if model is None else model
-        if not isinstance(resolved_model, str) or not resolved_model.strip():
-            raise ValueError("model must not be empty")
-        if resolved_model != self.default_model:
-            self.cli.validate_model(resolved_model)
+        resolved_model = (
+            self.cli.default_model() if model is None else self.cli.resolve_model(model)
+        ).id
         if dangerously_skip_permissions is not True:
             raise ValueError("dangerously_skip_permissions must be true")
         normalized_directories = normalize_additional_directories(

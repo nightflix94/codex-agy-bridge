@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from codex_agy_bridge import core, expected_artifact, harness_contract
+from codex_agy_bridge.cli import ModelEntry
 from codex_agy_bridge.exceptions import WorkspaceAccessError
 from codex_agy_bridge.state import (
     AgentMode,
@@ -28,7 +29,9 @@ DEFAULT_STALE_ACTION: StaleAction = "notify"
 class CliValidator(Protocol):
     def capabilities(self): ...
 
-    def validate_model(self, model: str) -> None: ...
+    def resolve_model(self, name: str) -> ModelEntry: ...
+
+    def default_model(self) -> ModelEntry: ...
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,7 @@ class RunRequest:
     conversation_id: str | None
     dangerously_skip_permissions: bool
     model: str
+    model_display_name: str
     sandbox: bool
     additional_directories: tuple[str, ...]
     execution_mode: ExecutionMode
@@ -53,7 +57,9 @@ class RunRequest:
     target_name: str | None
     expected_file: str | None
     expected_file_baseline: expected_artifact.ArtifactFingerprint | None
+    expect_edits: bool
     request_key: str
+    legacy_request_key: str
 
     @classmethod
     def prepare(
@@ -65,7 +71,6 @@ class RunRequest:
         conversation_id: str | None,
         dangerously_skip_permissions: bool,
         model: str | None,
-        default_model: str,
         sandbox: bool,
         additional_directories: list[str],
         execution_mode: str,
@@ -78,6 +83,7 @@ class RunRequest:
         expected_file: str | None = None,
         stale_timeout_seconds: int = DEFAULT_STALE_TIMEOUT_SECONDS,
         stale_action: str = DEFAULT_STALE_ACTION,
+        expect_edits: bool = False,
     ) -> RunRequest:
         if "\x00" in prompt:
             raise ValueError("prompt must not contain NUL bytes")
@@ -113,6 +119,8 @@ class RunRequest:
             raise ValueError("execution_surface must be foreground or headless")
         if not isinstance(human_attachable, bool):
             raise ValueError("human_attachable must be a boolean")
+        if not isinstance(expect_edits, bool):
+            raise ValueError("expect_edits must be a boolean")
         normalized_directories = normalize_additional_directories(
             additional_directories,
             workspace=root,
@@ -138,9 +146,11 @@ class RunRequest:
             if needs_visible_cli and not capabilities.interactive:
                 raise ValueError("installed agy does not support --prompt-interactive")
 
-        effective_model = model or default_model
-        if model is not None and effective_model != default_model:
-            cli.validate_model(effective_model)
+        # Never hand agy a name it does not publish: it would silently run
+        # its own default model instead, on that model's separate quota.
+        resolved_model = (
+            cli.default_model() if model is None else cli.resolve_model(model)
+        )
         mode = cast(ExecutionMode, execution_mode)
         normalized_agent_mode = cast(AgentMode, agent_mode)
         normalized_execution_surface = cast(ExecutionSurface, execution_surface)
@@ -151,7 +161,29 @@ class RunRequest:
             timeout_seconds=timeout_seconds,
             conversation_id=conversation_id,
             dangerously_skip_permissions=True,
-            model=effective_model,
+            model=resolved_model.id,
+            sandbox=sandbox,
+            additional_directories=list(normalized_directories),
+            execution_mode=mode,
+            agent_mode=normalized_agent_mode,
+            execution_surface=normalized_execution_surface,
+            human_attachable=human_attachable,
+            goal_id=goal_id,
+            target_name=target_name,
+            expected_file=normalized_expected_file,
+            stale_timeout_seconds=stale_timeout_seconds,
+            stale_action=normalized_stale_action,
+            expect_edits=expect_edits,
+        )
+        # Before models were resolved, a Run's identity used the name the
+        # caller passed (usually the display name) and had no expect_edits.
+        legacy_request_key = _request_key(
+            prompt=prompt,
+            workspace=str(root),
+            timeout_seconds=timeout_seconds,
+            conversation_id=conversation_id,
+            dangerously_skip_permissions=True,
+            model=resolved_model.display_name,
             sandbox=sandbox,
             additional_directories=list(normalized_directories),
             execution_mode=mode,
@@ -172,7 +204,8 @@ class RunRequest:
             stale_action=normalized_stale_action,
             conversation_id=conversation_id,
             dangerously_skip_permissions=True,
-            model=effective_model,
+            model=resolved_model.id,
+            model_display_name=resolved_model.display_name,
             sandbox=sandbox,
             additional_directories=normalized_directories,
             execution_mode=mode,
@@ -183,8 +216,22 @@ class RunRequest:
             target_name=target_name,
             expected_file=normalized_expected_file,
             expected_file_baseline=expected_file_baseline,
+            expect_edits=expect_edits,
             request_key=request_key,
+            legacy_request_key=legacy_request_key,
         )
+
+    def duplicates(self, state: RunState) -> bool:
+        """Return whether an active Run was reserved for this same request.
+
+        A Run reserved before this bridge resolved models carries no
+        model_display_name and was keyed by the display name; matching it
+        keeps an upgrade from starting the same work twice.
+        """
+        key = state.get("request_key")
+        if key == self.request_key:
+            return True
+        return "model_display_name" not in state and key == self.legacy_request_key
 
     def initial_state(
         self,
@@ -237,6 +284,9 @@ class RunRequest:
             "execution_surface": self.execution_surface,
             "human_attachable": self.human_attachable,
             "model": self.model,
+            "model_display_name": self.model_display_name,
+            "effective_model": None,
+            "expect_edits": self.expect_edits,
             "goal_id": self.goal_id,
             "target_name": self.target_name,
             "request_key": self.request_key,
@@ -316,6 +366,7 @@ def _request_key(
     expected_file: str | None = None,
     stale_timeout_seconds: int = DEFAULT_STALE_TIMEOUT_SECONDS,
     stale_action: str = DEFAULT_STALE_ACTION,
+    expect_edits: bool = False,
 ) -> str:
     payload = {
         "prompt": prompt.rstrip(),
@@ -343,5 +394,8 @@ def _request_key(
     ):
         payload["stale_timeout_seconds"] = stale_timeout_seconds
         payload["stale_action"] = stale_action
+    # Same reasoning: only a non-default edit expectation changes identity.
+    if expect_edits:
+        payload["expect_edits"] = True
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from codex_agy_bridge import diagnostics
+from codex_agy_bridge.cli import ModelEntry
 
 
 class FakeCli:
@@ -12,7 +13,16 @@ class FakeCli:
         return "1.0.8"
 
     def models(self, *, refresh=False):
-        return ["Model A", "Model B"]
+        return ["model-a\tModel A", "model-b\tModel B"]
+
+    def model_catalog(self, *, refresh=False):
+        return [
+            ModelEntry(id="model-a", display_name="Model A"),
+            ModelEntry(id="model-b", display_name="Model B"),
+        ]
+
+    def default_model(self):
+        return ModelEntry(id="model-b", display_name="Model B")
 
     def plugins(self):
         return [{"name": "alpha", "raw": "alpha"}]
@@ -36,8 +46,10 @@ def test_models_report_includes_default_and_observation_time():
     result = diagnostics.models(cli=FakeCli(), refresh=True)
 
     assert result["cli_version"] == "1.0.8"
-    assert result["default_model"] == "Model A"
-    assert result["models"] == ["Model A", "Model B"]
+    assert result["default_model"] == "model-b"
+    assert result["default_model_error"] is None
+    assert result["models"] == ["model-a\tModel A", "model-b\tModel B"]
+    assert result["model_ids"] == ["model-a", "model-b"]
     assert result["observed_at"]
 
 

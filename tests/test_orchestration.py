@@ -17,6 +17,11 @@ from codex_agy_bridge import (
     session_events,
 )
 from codex_agy_bridge._orchestrator import RunnerOrchestrator
+from codex_agy_bridge.cli import (
+    DEFAULT_MODEL_PREFERENCE,
+    ModelEntry,
+    UnknownModelError,
+)
 from codex_agy_bridge.exceptions import (
     AuthenticationRequiredError,
     ConcurrencyLimitExceeded,
@@ -43,7 +48,7 @@ def test_identical_active_start_reuses_existing_run(monkeypatch, tmp_path):
         "prompt": "Review the pull request",
         "requested_conversation_id": None,
         "dangerously_skip_permissions": True,
-        "model": orchestration.DEFAULT_MODEL,
+        "model": DEFAULT_MODEL_PREFERENCE,
         "goal_id": None,
         "target_name": None,
         "request_key": orchestration._request_key(
@@ -52,7 +57,7 @@ def test_identical_active_start_reuses_existing_run(monkeypatch, tmp_path):
             timeout_seconds=900,
             conversation_id=None,
             dangerously_skip_permissions=True,
-            model=orchestration.DEFAULT_MODEL,
+            model=DEFAULT_MODEL_PREFERENCE,
             sandbox=False,
             additional_directories=[],
             execution_mode="print",
@@ -319,7 +324,10 @@ def test_create_run_checks_auth_before_model_validation(monkeypatch, tmp_path):
         def authentication_status(self):
             return {"status": "auth_required", "evidence": "Please sign in"}
 
-        def validate_model(self, _model):
+        def resolve_model(self, _name):
+            pytest.fail("model validation must not run before authentication")
+
+        def default_model(self):
             pytest.fail("model validation must not run before authentication")
 
     monkeypatch.setattr(
@@ -372,6 +380,12 @@ def test_create_run_rechecks_cached_auth_required_status_on_retry(
                     "evidence": "Please sign in",
                 }
             return {"status": "authenticated"}
+
+        def resolve_model(self, name):
+            return ModelEntry(id=name, display_name=name)
+
+        def default_model(self):
+            return ModelEntry(id=DEFAULT_MODEL_PREFERENCE, display_name="Default")
 
     monkeypatch.setattr(
         "codex_agy_bridge._orchestrator.auth_flow.start_visible_auth_session",
@@ -2028,6 +2042,12 @@ def test_concurrent_identical_starts_reserve_queued_run(monkeypatch, tmp_path):
         def authentication_status(self):
             return {"status": "authenticated"}
 
+        def resolve_model(self, name):
+            return ModelEntry(id=name, display_name=name)
+
+        def default_model(self):
+            return ModelEntry(id=DEFAULT_MODEL_PREFERENCE, display_name="Default")
+
         def capabilities(self):
             return type(
                 "Capabilities",
@@ -2765,13 +2785,13 @@ def test_goal_accepts_none_model_as_default(tmp_path):
         model=None,
     )
 
-    assert goal["model"] == orchestration.DEFAULT_MODEL
+    assert goal["model"] == DEFAULT_MODEL_PREFERENCE
 
 
 def test_goal_rejects_unknown_model_before_persistence(tmp_path):
     class RejectingCli:
-        def validate_model(self, model):
-            raise ValueError(f"unknown Antigravity model: {model}")
+        def resolve_model(self, name):
+            raise UnknownModelError(f"unknown Antigravity model: {name}")
 
     store = MemoryRunStore()
     orchestrator = RunnerOrchestrator(

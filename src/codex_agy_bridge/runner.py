@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import signal
+import subprocess
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -42,6 +43,14 @@ def build_command(state: RunState) -> list[str]:
         state,
         run_directory=directory,
     )
+
+
+def model_id_for_label(label: str) -> str | None:
+    """Return the model ID agy publishes for a display label, if any."""
+    try:
+        return AntigravityCli().resolve_model(label).id
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError):
+        return None
 
 
 def launch_process(

@@ -472,6 +472,44 @@ def run_provider_health(directory: Path) -> dict[str, Any]:
     return {"status": "unknown"}
 
 
+QUOTA_EXHAUSTED_PHRASES = (
+    "\u26a0 individual quota reached",
+    "resource_exhausted (code 429)",
+    "quota exhausted",
+)
+# "Resets in 162h42m53s." as printed after agy's quota warning (lowercased).
+QUOTA_RESET_RE = re.compile(
+    r"resets in\s+((?=\d)(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)"
+)
+# Provider health statuses after which the agent cannot make progress until
+# an operator acts, so a live Run is failed rather than left "running".
+FATAL_PROVIDER_STATUSES = frozenset({"quota_exhausted"})
+
+
+GLOG_ERROR_LINE_RE = re.compile(r"^[EF]\d{4} [^\n]*$", re.MULTILINE)
+
+
+def confirmed_fatal_provider_health(directory: Path) -> dict[str, Any] | None:
+    """Return fatal provider health only when two independent sources agree.
+
+    The terminal echoes the task prompt, can display file contents, and may
+    re-render an earlier turn of a resumed Conversation, so a quota warning on
+    screen alone is not proof. agy writes its own error-severity glog line to
+    this Run's fresh agy.log when the agent stops on the same error; requiring
+    both rules out text that merely shows the warning.
+    """
+    terminal_health = provider_health(directory / "terminal.log")
+    if terminal_health["status"] not in FATAL_PROVIDER_STATUSES:
+        return None
+    error_lines = "\n".join(
+        GLOG_ERROR_LINE_RE.findall(_read_tail(directory / "agy.log", 100_000))
+    )
+    runtime_health = classify_provider_health_text(error_lines)
+    if runtime_health["status"] != terminal_health["status"]:
+        return None
+    return {**runtime_health, **terminal_health}
+
+
 def classify_provider_health_text(
     text: str,
     *,
@@ -492,7 +530,10 @@ def _classify_provider_health_text(
     if not text:
         return {"status": "unknown"}
     signals: list[tuple[str, tuple[str, ...], str | None]] = [
-        ("quota_exhausted", ("resource_exhausted", "quota exhausted"), None),
+        # Anchored to the forms agy itself prints - the TUI's warning glyph
+        # and the runtime log's status code - because the terminal also
+        # echoes the task prompt, and a prompt may quote the bare sentence.
+        ("quota_exhausted", QUOTA_EXHAUSTED_PHRASES, None),
         ("rate_limited", ("rate limit", "too many requests"), None),
         ("authenticated", ("applyauthresult:",), None),
         (
@@ -533,11 +574,21 @@ def _classify_provider_health_text(
             latest = (position, status, action)
     if latest is None:
         return {"status": "unknown"}
-    _, status, action = latest
+    position, status, action = latest
     health: dict[str, Any] = {"status": status}
     if action:
         health["action"] = action
+    if status == "quota_exhausted":
+        reset = QUOTA_RESET_RE.search(text, position, position + 600)
+        if reset is not None:
+            health["reset_in"] = reset.group(1)
+            health["reset_in_seconds"] = _duration_seconds(reset)
     return health
+
+
+def _duration_seconds(match: re.Match[str]) -> int:
+    hours, minutes, seconds = (int(value or 0) for value in match.group(2, 3, 4))
+    return hours * 3600 + minutes * 60 + seconds
 
 
 def conversation_for_workspace(workspace: str) -> str | None:

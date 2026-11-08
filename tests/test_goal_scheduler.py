@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from codex_agy_bridge.cli import ModelEntry, UnknownModelError
 from codex_agy_bridge.goal_scheduler import GoalScheduler, GoalTargetLaunch
 from codex_agy_bridge.state import RunState
 from codex_agy_bridge.store import MemoryRunStore
@@ -16,10 +17,14 @@ class FakeCli:
     def __init__(self) -> None:
         self.validated: list[str] = []
 
-    def validate_model(self, model: str) -> None:
-        self.validated.append(model)
-        if model == "unknown":
-            raise ValueError("unknown model")
+    def resolve_model(self, name: str) -> ModelEntry:
+        self.validated.append(name)
+        if name in {"", "unknown"}:
+            raise UnknownModelError("unknown model")
+        return ModelEntry(id=name, display_name=name)
+
+    def default_model(self) -> ModelEntry:
+        return ModelEntry(id=DEFAULT_MODEL, display_name="Default Model")
 
 
 class FakeObservation:
@@ -73,7 +78,6 @@ def scheduler(tmp_path, *, store=None, launcher=None):
         launch_run=launcher or default_launcher,
         observation=FakeObservation(),
         cli=FakeCli(),
-        default_model=DEFAULT_MODEL,
         max_parallel_limit=50,
     )
     return instance, store, launches

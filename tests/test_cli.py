@@ -7,7 +7,23 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from codex_agy_bridge.cli import AntigravityCli
+from codex_agy_bridge.cli import (
+    DEFAULT_MODEL_ENV,
+    AntigravityCli,
+    ModelEntry,
+    UnknownModelError,
+)
+
+# `agy models` output verbatim in shape: a progress line, then id<TAB>name rows.
+MODEL_LISTING = (
+    "Fetching available models...\n"
+    "gemini-4-argon-medium\tGemini 4 Argon (Medium)\n"
+    "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n"
+)
+MODEL_LINES = [
+    "gemini-4-argon-medium\tGemini 4 Argon (Medium)",
+    "gemini-3.8-flash-high\tGemini 3.8 Flash (High)",
+]
 
 
 def completed(stdout: str = "", stderr: str = "", returncode: int = 0):
@@ -25,7 +41,7 @@ def test_cli_discovers_version_models_plugins_and_capabilities(monkeypatch):
         ("agy", "--help"): completed(
             "--sandbox\n--add-dir\n--prompt-interactive\n"
         ),
-        ("agy", "models"): completed("Model A\nModel B\n"),
+        ("agy", "models"): completed(MODEL_LISTING),
         ("agy", "plugin", "list"): completed("alpha\nenabled beta\n"),
     }
     monkeypatch.setattr(
@@ -35,7 +51,7 @@ def test_cli_discovers_version_models_plugins_and_capabilities(monkeypatch):
     cli = AntigravityCli(executable="agy")
 
     assert cli.version() == "1.0.8"
-    assert cli.models(refresh=True) == ["Model A", "Model B"]
+    assert cli.models(refresh=True) == MODEL_LINES
     assert cli.plugins() == [
         {"name": "alpha", "raw": "alpha"},
         {"name": "beta", "raw": "enabled beta"},
@@ -227,7 +243,7 @@ def test_cli_model_discovery_is_single_flight(monkeypatch):
         with calls_lock:
             calls += 1
         time.sleep(0.05)
-        return completed("Model A\nModel B\n")
+        return completed(MODEL_LISTING)
 
     monkeypatch.setattr("codex_agy_bridge.cli.subprocess.run", run)
     cli = AntigravityCli(executable="agy")
@@ -235,7 +251,7 @@ def test_cli_model_discovery_is_single_flight(monkeypatch):
     with ThreadPoolExecutor(max_workers=10) as pool:
         results = list(pool.map(lambda _: cli.models(), range(10)))
 
-    assert results == [["Model A", "Model B"]] * 10
+    assert results == [MODEL_LINES] * 10
     assert calls == 1
 
 
@@ -275,7 +291,7 @@ def test_cli_serializes_different_commands(monkeypatch):
             active -= 1
         if command[-2:] == ["plugin", "list"]:
             return completed("No imported plugins.\n")
-        return completed("Model A\n")
+        return completed(MODEL_LISTING)
 
     monkeypatch.setattr("codex_agy_bridge.cli.subprocess.run", run)
     cli = AntigravityCli(executable="agy")
@@ -284,7 +300,7 @@ def test_cli_serializes_different_commands(monkeypatch):
         model_result = pool.submit(cli.models)
         plugin_result = pool.submit(cli.plugins)
 
-    assert model_result.result() == ["Model A"]
+    assert model_result.result() == MODEL_LINES
     assert plugin_result.result() == []
     assert max_active == 1
 
@@ -312,25 +328,101 @@ def test_cli_rejects_unrecognized_plugin_list_lines(monkeypatch):
         AntigravityCli(executable="agy").plugins()
 
 
-def test_validate_model_accepts_either_published_identifier(monkeypatch):
-    """agy models prints "<id>\\tDisplay Name", so both halves are valid.
+def test_resolve_model_accepts_either_published_identifier(monkeypatch):
+    """agy models prints "<id>\\tDisplay Name", so both halves name a model.
 
     Comparing a caller's model against the raw line matched neither half and
     rejected every real model, which made the model argument unusable.
     """
-    listing = (
-        "gemini-3.7-flash-high\tGemini 3.7 Flash (High)\n"
-        "gemini-3.5-flash-medium\tGemini 3.5 Flash (Medium)\n"
-    )
     monkeypatch.setattr(
         "codex_agy_bridge.cli.subprocess.run",
-        lambda _command, **_kwargs: completed(listing),
+        lambda _command, **_kwargs: completed(MODEL_LISTING),
+    )
+    cli = AntigravityCli(executable="agy")
+    flash = ModelEntry(
+        id="gemini-3.8-flash-high",
+        display_name="Gemini 3.8 Flash (High)",
+    )
+
+    assert cli.resolve_model("gemini-3.8-flash-high") == flash
+    assert cli.resolve_model("Gemini 3.8 Flash (High)") == flash
+
+
+def test_resolve_model_rejects_unknown_model_listing_valid_ids(monkeypatch):
+    """An unknown name must never reach agy, which would swap in its default."""
+    monkeypatch.setattr(
+        "codex_agy_bridge.cli.subprocess.run",
+        lambda _command, **_kwargs: completed(MODEL_LISTING),
     )
     cli = AntigravityCli(executable="agy")
 
-    cli.validate_model("Gemini 3.7 Flash (High)")
-    cli.validate_model("gemini-3.7-flash-high")
-    cli.validate_model("Gemini 3.5 Flash (Medium)")
+    with pytest.raises(UnknownModelError) as raised:
+        cli.resolve_model("Gemini 3.7 Flash (High)")
 
-    with pytest.raises(ValueError, match="unknown Antigravity model"):
-        cli.validate_model("Gemini 9 Ultra (Maximum)")
+    message = str(raised.value)
+    assert "unknown Antigravity model" in message
+    assert "gemini-4-argon-medium" in message
+    assert "gemini-3.8-flash-high" in message
+    # The "Fetching..." progress line is not a model.
+    assert "Fetching" not in message
+    with pytest.raises(UnknownModelError):
+        cli.resolve_model("")
+
+
+def test_resolve_model_rejects_a_display_name_shared_by_two_models(monkeypatch):
+    monkeypatch.setattr(
+        "codex_agy_bridge.cli.subprocess.run",
+        lambda _command, **_kwargs: completed(
+            "model-a\tShared Name\nmodel-b\tShared Name\n"
+        ),
+    )
+
+    with pytest.raises(UnknownModelError, match="ambiguous"):
+        AntigravityCli(executable="agy").resolve_model("Shared Name")
+
+
+def test_resolve_model_refreshes_cached_list_once_on_a_miss(monkeypatch):
+    listings = [MODEL_LISTING, MODEL_LISTING + "new-model\tNew Model (High)\n"]
+    calls = 0
+
+    def run(_command, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return completed(listings[min(calls, len(listings)) - 1])
+
+    monkeypatch.setattr("codex_agy_bridge.cli.subprocess.run", run)
+    cli = AntigravityCli(executable="agy", model_cache_seconds=3600)
+
+    cli.resolve_model("gemini-3.8-flash-high")
+    cli.resolve_model("gemini-4-argon-medium")
+    assert calls == 1  # cached between lookups
+
+    assert cli.resolve_model("new-model").id == "new-model"
+    assert calls == 2  # one refresh on the miss
+
+
+def test_default_model_resolves_built_in_flash_preference(monkeypatch):
+    monkeypatch.delenv(DEFAULT_MODEL_ENV, raising=False)
+    monkeypatch.setattr(
+        "codex_agy_bridge.cli.subprocess.run",
+        lambda _command, **_kwargs: completed(MODEL_LISTING),
+    )
+
+    assert AntigravityCli(executable="agy").default_model().id == (
+        "gemini-3.8-flash-high"
+    )
+
+
+def test_default_model_honors_env_and_rejects_unknown_preference(monkeypatch):
+    monkeypatch.setattr(
+        "codex_agy_bridge.cli.subprocess.run",
+        lambda _command, **_kwargs: completed(MODEL_LISTING),
+    )
+    cli = AntigravityCli(executable="agy")
+
+    monkeypatch.setenv(DEFAULT_MODEL_ENV, "Gemini 4 Argon (Medium)")
+    assert cli.default_model().id == "gemini-4-argon-medium"
+
+    monkeypatch.setenv(DEFAULT_MODEL_ENV, "Gemini 3.7 Flash (High)")
+    with pytest.raises(UnknownModelError, match=DEFAULT_MODEL_ENV):
+        cli.default_model()

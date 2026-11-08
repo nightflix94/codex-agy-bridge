@@ -24,6 +24,7 @@ from codex_agy_bridge import (
     run_input_delivery,
     session_events,
     terminal,
+    workspace_changes,
 )
 from codex_agy_bridge.cli import AntigravityCli
 from codex_agy_bridge.exceptions import (
@@ -47,7 +48,6 @@ from codex_agy_bridge.state import (
 )
 from codex_agy_bridge.store import DiskRunStore, RunStore
 
-DEFAULT_MODEL = "Gemini 3.7 Flash (High)"
 DEFAULT_MAX_PARALLEL = 50
 JANITOR_INTERVAL_SECONDS = 60
 DEFAULT_WAIT_TIMEOUT_SECONDS = 86_400
@@ -236,7 +236,6 @@ class RunnerOrchestrator:
             launch_run=self._launch_goal_run,
             observation=self._run_observation,
             cli=self.cli,
-            default_model=DEFAULT_MODEL,
             max_parallel_limit=DEFAULT_MAX_PARALLEL,
         )
 
@@ -404,7 +403,7 @@ class RunnerOrchestrator:
         timeout_seconds: int,
         conversation_id: str | None,
         dangerously_skip_permissions: bool = True,
-        model: str | None = DEFAULT_MODEL,
+        model: str | None = None,
         sandbox: bool = False,
         additional_directories: list[str] | None = None,
         execution_mode: str = "print",
@@ -416,6 +415,7 @@ class RunnerOrchestrator:
         expected_file: str | None = None,
         stale_timeout_seconds: int = 300,
         stale_action: str = "notify",
+        expect_edits: bool = False,
         _goal_max_parallel: int | None = None,
     ) -> RunState:
         """Start a new asynchronous Antigravity conversation or reuse duplicate.
@@ -426,13 +426,16 @@ class RunnerOrchestrator:
             timeout_seconds: Hard execution limit in seconds.
             conversation_id: Thread conversation identifier or None.
             dangerously_skip_permissions: Must be true; skip user-interaction prompts.
-            model: Name of the LLM model to request.
+            model: Model ID or exact display name from ``agy models``; None
+                resolves the configured default. Unknown names are rejected.
             sandbox: Forward the Antigravity CLI sandbox policy hint; not
                 filesystem containment.
             additional_directories: Forward validated CLI directory hints; not
                 filesystem boundaries.
             goal_id: Optional parent goal ID.
             target_name: Optional target identifier.
+            expect_edits: Fail an otherwise successful Run with failure_reason
+                no_edits when its git workspace has no changed files.
         Returns:
             The created or reused RunState dict.
 
@@ -478,7 +481,6 @@ class RunnerOrchestrator:
             conversation_id=conversation_id,
             dangerously_skip_permissions=dangerously_skip_permissions,
             model=model,
-            default_model=DEFAULT_MODEL,
             sandbox=sandbox,
             additional_directories=additional_directories or [],
             execution_mode=execution_mode,
@@ -491,6 +493,7 @@ class RunnerOrchestrator:
             expected_file=expected_file,
             stale_timeout_seconds=stale_timeout_seconds,
             stale_action=stale_action,
+            expect_edits=expect_edits,
         )
         self.maybe_run_janitor()
         from codex_agy_bridge import orchestration
@@ -507,7 +510,7 @@ class RunnerOrchestrator:
                 (
                     state
                     for state in running
-                    if state.get("request_key") == request.request_key
+                    if request.duplicates(state)
                 ),
                 None,
             )
@@ -675,6 +678,9 @@ class RunnerOrchestrator:
                 error=terminal_error,
                 finished_at=finished_at,
                 only_if_active=True,
+                **workspace_changes.changes_since_baseline(
+                    self.run_dir(run_id)
+                ).state_fields(),
             )
             if (
                 state["status"] == terminal_status
@@ -747,6 +753,10 @@ class RunnerOrchestrator:
                 "session_state": session_state,
                 "conversation_id": conversation_id,
                 "error": state.get("error"),
+                "failure_reason": state.get("failure_reason"),
+                "model": state.get("model"),
+                "effective_model": state.get("effective_model"),
+                "effective_model_check": state.get("effective_model_check"),
                 "created_at": state.get("created_at"),
                 "updated_at": state.get("updated_at"),
                 "finished_at": state.get("finished_at"),
@@ -884,7 +894,7 @@ class RunnerOrchestrator:
         timeout_seconds: int = 900,
         conversation_id: str | None = None,
         dangerously_skip_permissions: bool = True,
-        model: str | None = DEFAULT_MODEL,
+        model: str | None = None,
         sandbox: bool = False,
         additional_directories: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -927,7 +937,7 @@ class RunnerOrchestrator:
         timeout_seconds: int = 900,
         conversation_id: str | None = None,
         dangerously_skip_permissions: bool = True,
-        model: str | None = DEFAULT_MODEL,
+        model: str | None = None,
         sandbox: bool = False,
         additional_directories: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -969,7 +979,7 @@ class RunnerOrchestrator:
         timeout_seconds: int = 900,
         conversation_id: str | None = None,
         dangerously_skip_permissions: bool = True,
-        model: str | None = DEFAULT_MODEL,
+        model: str | None = None,
         sandbox: bool = False,
         additional_directories: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -1034,7 +1044,7 @@ class RunnerOrchestrator:
         objective: str,
         workspace: str,
         max_parallel: int = 2,
-        model: str | None = DEFAULT_MODEL,
+        model: str | None = None,
         sandbox: bool = False,
         additional_directories: list[str] | None = None,
         dangerously_skip_permissions: bool = True,

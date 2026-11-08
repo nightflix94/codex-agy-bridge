@@ -244,6 +244,79 @@ be indistinguishable from a frozen one.
 Use `agy_goal` when the harness should split work into named targets with a
 shared objective and bounded parallelism.
 
+### Trusting Run Status
+
+A lead agent should not have to read the terminal to know what a run did.
+
+**Models.** `model` takes a model ID (or its exact display name) from
+`agy_admin(action="models")`, for example `gemini-3.8-flash-high`. An unknown
+model is rejected with an error listing the valid IDs; it is never passed to
+`agy`, which would silently substitute its own default model and spend that
+model's separate quota. Omitting `model` resolves `AGY_BRIDGE_DEFAULT_MODEL`,
+or `gemini-3.8-flash-high` when unset, against the live list. The list is
+cached for 60 seconds and refreshed once when a lookup misses. After start the
+bridge reads the model `agy` actually selected, first from its runtime log
+(`Propagating selected model override ... label="..."`), otherwise from the
+terminal banner and footer, and records it as `effective_model` with an
+`effective_model_check` of `matched`, `mismatch`, `unrecognized`, or
+`not_reported`. A mismatch fails the run at once. A model `agy` never names
+(within `AGY_BRIDGE_MODEL_REPORT_GRACE_SECONDS`) or names but does not publish
+is not failed, since that could stop healthy runs after an `agy` wording change;
+it emits a `model_unverified` event that `agy_run_wait(condition="any_attention")`
+returns.
+
+**Failure reasons.** Failed runs carry a machine-readable `failure_reason`
+(and `failure_detail`) in run state, in `agy_run_observe` status, in
+`agy_run_result`, and on the `run_failed` event that
+`agy_run_wait(condition="any_terminal")` returns:
+
+| `failure_reason` | Meaning |
+| --- | --- |
+| `model_mismatch` | `agy` reported a different model than requested; `failure_detail` names both |
+| `quota_exhausted` | `agy` showed its quota warning and logged the same error in this run's own `agy.log`; `failure_detail.reset_in` / `reset_in_seconds` give the reset time when printed |
+| `no_edits` | The run reported success but changed no files and `expect_edits` was true |
+
+Other failures (timeouts, agent errors, missing expected files) keep
+`failure_reason: null` and describe themselves in `error`.
+
+Quota requires both sources because the terminal also shows the task prompt,
+file contents the agent reads, and earlier turns of a resumed conversation; a
+warning there alone is not proof. `provider_health` still reports what the
+terminal shows.
+
+**Change accounting.** Every run records the git state of its workspace's
+repository at start and end, read-only (no stash, reset, staging, or commit;
+`git status` runs with `--no-optional-locks`). `agy_run_result` returns
+`changes` with `head_before`, `head_after`, `workspace`, and per-file `path`,
+`change` (`added`/`modified`/`deleted`), `added` and `removed` line counts, and
+`in_workspace`, measured against the state at run start. This holds for failed,
+canceled, and reaped runs too. Files that were already dirty are compared with
+compressed copies taken at start, kept in the run directory. Ignored files are
+tracked by hash only, so their contents (often secrets) are never copied:
+a changed ignored file is listed with `counts_unavailable_reason`, a new one is
+counted. Ignored directories such as `node_modules/` are not walked and are
+listed in `excluded_ignored_directories`. Files over 50 MB and binary files are
+listed without counts, with `counts_unavailable_reason`. Outside a git work
+tree `changes` is `null` and `changes_unavailable_reason` says why.
+
+`agy_run_start` accepts `expect_edits` (default `true` for `mode="task"`,
+`false` for `mode="interactive"`). When true and the git workspace has no
+changed files, the run ends `failed` with `failure_reason: "no_edits"` instead
+of `completed`. Set it to `false` for read-only or question runs. Review tools,
+`agy_start_with_expected_file`, and goal targets do not expect edits. A
+non-git workspace cannot be checked and is not failed.
+
+**Report checks.** `agy_run_result` also returns:
+
+- `warnings`: includes `{"kind": "prompt_fragment", "overlap": ...}` when at
+  least 80% of the result's 4-word sequences also occur in the run's prompt,
+  meaning the "result" is probably a slice of its own task. This is a warning,
+  not a failure.
+- `unverified_mentions`: a heuristic (`"heuristic": true`) list of file paths
+  named in the final report that are not in `changes`. A report may name files
+  it only read, so treat each entry as something to check, not as an error.
+  It is `null` when no change record exists.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -254,6 +327,8 @@ shared objective and bounded parallelism.
 | `AGY_BRIDGE_MAX_PARALLEL` | `50` | Global concurrent-run limit |
 | `AGY_BRIDGE_COMPLETION_STABILITY_SECONDS` | `150` | Time a final marker must remain stable |
 | `AGY_BRIDGE_MCP_WAIT_SLICE_SECONDS` | `120` | Max seconds a single `agy_run_wait` MCP call blocks before returning a snapshot so gateways do not time out |
+| `AGY_BRIDGE_MODEL_REPORT_GRACE_SECONDS` | `60` | Seconds after launch before a run whose model `agy` has not named emits `model_unverified` |
+| `AGY_BRIDGE_DEFAULT_MODEL` | `gemini-3.8-flash-high` | Model ID or display name used when a run omits `model`; must appear in `agy models` or starts fail with the valid IDs |
 
 Run state survives MCP server restarts under
 `~/.local/state/codex-agy-bridge/`.

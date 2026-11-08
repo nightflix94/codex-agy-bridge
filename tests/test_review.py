@@ -6,6 +6,7 @@ import pytest
 
 from codex_agy_bridge import review
 from codex_agy_bridge._orchestrator import RunnerOrchestrator
+from codex_agy_bridge.cli import ModelEntry
 from codex_agy_bridge.process import ProcessManager
 from codex_agy_bridge.store import MemoryRunStore
 
@@ -39,8 +40,11 @@ class FakeCli:
             },
         )()
 
-    def validate_model(self, model):
-        pass
+    def resolve_model(self, name):
+        return ModelEntry(id=name, display_name=name)
+
+    def default_model(self):
+        return ModelEntry(id="default-model", display_name="Default Model")
 
 
 def test_review_schema_rejects_untyped_array_entries():

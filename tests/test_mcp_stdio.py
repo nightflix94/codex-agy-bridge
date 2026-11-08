@@ -184,9 +184,11 @@ if "--help" in sys.argv:
     print("--prompt-interactive")
     raise SystemExit(0)
 if "models" in sys.argv:
-    log_path = pathlib.Path(sys.argv[sys.argv.index("--log-file") + 1])
-    log_path.write_text("OAuth: authenticated successfully\\n")
-    print("Fake Model")
+    if "--log-file" in sys.argv:
+        log_path = pathlib.Path(sys.argv[sys.argv.index("--log-file") + 1])
+        log_path.write_text("OAuth: authenticated successfully\\n")
+    print("Fetching available models...")
+    print("fake-model\\tFake Model")
     raise SystemExit(0)
 print("\\x1b[2J{marker}", flush=True)
 print("\\x1b[31m{marker}\\x1b[0m", file=sys.stderr, flush=True)
@@ -205,6 +207,7 @@ time.sleep(10)
     environment.update(
         {
             "AGY_CMD": str(fake_agy),
+            "AGY_BRIDGE_DEFAULT_MODEL": "fake-model",
             "AGY_BRIDGE_STATE_DIR": str(tmp_path / "state"),
             "PATH": f"{fake_bin}:{environment['PATH']}",
         }

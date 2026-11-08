@@ -26,6 +26,7 @@ EventKind = Literal[
     "conversation_unresolved",
     "terminal_output_observed",
     "terminal_attach_failed",
+    "model_unverified",
     "needs_attention",
     "attention_cleared",
     "mcp_input_submitted",
@@ -44,6 +45,7 @@ EVENT_KINDS = {
     "conversation_unresolved",
     "terminal_output_observed",
     "terminal_attach_failed",
+    "model_unverified",
     "needs_attention",
     "attention_cleared",
     "mcp_input_submitted",
@@ -62,6 +64,7 @@ EVENT_CATEGORIES = {
     "conversation_unresolved": "progress",
     "terminal_output_observed": "terminal",
     "terminal_attach_failed": "terminal",
+    "model_unverified": "model",
     "needs_attention": "approval_prompt",
     "attention_cleared": "approval_prompt",
     "mcp_input_submitted": "mcp_input",
@@ -80,6 +83,7 @@ EVENT_ACTIVITY_STATES = {
     "conversation_unresolved": "uncorrelated",
     "terminal_output_observed": "working",
     "terminal_attach_failed": "working",
+    "model_unverified": "working",
     "needs_attention": "awaiting_user",
     "attention_cleared": "working",
     "mcp_input_submitted": "awaiting_mcp_input",
@@ -98,6 +102,7 @@ EventCategory = Literal[
     "approval_prompt",
     "mcp_input",
     "cancellation",
+    "model",
 ]
 EventSeverity = Literal["info", "action_required", "warning", "error"]
 EventSource = Literal["bridge", "runner", "terminal", "mcp", "antigravity"]

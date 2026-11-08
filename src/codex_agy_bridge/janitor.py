@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from codex_agy_bridge import workspace_changes
 from codex_agy_bridge.execution import TmuxSession
 from codex_agy_bridge.process import ProcessManager
 from codex_agy_bridge.run_cancellation import runner_process_alive
@@ -133,6 +134,9 @@ class RunJanitor:
                             status="failed",
                             error="runner process died or failed to start",
                             finished_at=datetime.now(UTC).isoformat(),
+                            **workspace_changes.changes_since_baseline(
+                                self.state_root / "runs" / run_id
+                            ).state_fields(),
                         )
 
         # Log Sweeper

@@ -10,6 +10,7 @@ import traceback
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from codex_agy_bridge import (
     core,
@@ -17,10 +18,15 @@ from codex_agy_bridge import (
     interactive_input,
     session_events,
     terminal,
+    workspace_changes,
 )
 from codex_agy_bridge import runner as runtime
 from codex_agy_bridge.execution import TmuxSession
-from codex_agy_bridge.prompt_detector import PromptDetector
+from codex_agy_bridge.prompt_detector import (
+    PromptDetector,
+    read_tail_text,
+    reported_model,
+)
 from codex_agy_bridge.run_completion import (
     CompletionMonitor,
     CompletionOutcome,
@@ -40,6 +46,12 @@ SCRATCH_FILE_MUTATION_TOOLS = frozenset(
     }
 )
 SCRATCH_FILE_PATH_FIELDS = ("TargetFile", "target_file", "path")
+FATAL_PROVIDER_CHECK_SECONDS = 2.0
+# How long after launch agy may take to name its model before the Run is
+# flagged model_unverified. agy logs its selection within seconds of sign-in.
+MODEL_REPORT_GRACE_SECONDS = float(
+    os.environ.get("AGY_BRIDGE_MODEL_REPORT_GRACE_SECONDS", "60")
+)
 
 
 def _marker_is_echoed_task_prompt(text: str, marker_at: int) -> bool:
@@ -131,6 +143,10 @@ class RunSupervisor:
         )
         self.done_response_step_index: int | None = None
         self.done_response_seen_at: float | None = None
+        self.effective_model_check: str | None = self.state.get(
+            "effective_model_check"
+        )
+        self.next_fatal_provider_check_at = 0.0
         self.prompt_detector = PromptDetector(
             self.directory,
             tmux_session=(
@@ -211,6 +227,7 @@ class RunSupervisor:
 
     def _launch(self) -> bool:
         command = runtime.build_command(self.state)
+        self._capture_workspace_baseline()
         self.launched_at = time.time()
         self.launched_monotonic = time.monotonic()
         core.write_private_text(
@@ -264,6 +281,23 @@ class RunSupervisor:
         self._auto_open_terminal()
         return True
 
+    def _capture_workspace_baseline(self) -> None:
+        """Record the workspace's git state so the Run's edits can be counted.
+
+        A baseline that cannot be written only costs the change record, which
+        then reports why it is unavailable; it must not stop the Run.
+        """
+        try:
+            workspace_changes.capture_baseline(
+                Path(str(self.state["workspace"])),
+                self.directory,
+            )
+        except Exception as error:
+            self._log(
+                "workspace_baseline_failed",
+                error=f"{type(error).__name__}: {error}",
+            )
+
     def _auto_open_terminal(self) -> None:
         if (
             self.state.get("execution_surface") != "foreground"
@@ -311,6 +345,17 @@ class RunSupervisor:
             self._observe_conversation()
             self._observe_correlation()
             self._observe_runtime_activity()
+            fatal = self._observe_effective_model() or self._observe_fatal_provider()
+            if fatal is not None:
+                reason, error, detail = fatal
+                self._stop(reason=reason)
+                self._finish(
+                    status="failed",
+                    error=error,
+                    failure_reason=reason,
+                    failure_detail=detail,
+                )
+                return 1
             stall_error = self._observe_progress_stall()
             if stall_error is not None:
                 self._stop(reason="progress_stalled")
@@ -354,18 +399,130 @@ class RunSupervisor:
                     marker="present" if marker and marker in (response or "")
                     else "absent",
                 )
-                self._finish(
+                status = self._finish(
                     status="completed",
                     result=cleaned,
                 )
                 self._stop(reason="completion_accepted")
-                return 0
+                return 1 if status == "failed" else 0
             if time.monotonic() >= deadline:
                 self._stop(reason="hard_timeout")
                 self._finish(status="failed", error="hard timeout exceeded")
                 return 1
             time.sleep(0.5)
         return None
+
+    def _observe_effective_model(self) -> tuple[str, str, dict[str, object]] | None:
+        """Record the model agy reports running and fail on a substitution.
+
+        agy replaces a model it does not recognize with its own default and
+        says so only on screen; that default draws on a separate quota. A
+        mismatch is fatal at once rather than letting the Run spend it.
+        """
+        if self.effective_model_check is not None:
+            return None
+        label = reported_model(
+            read_tail_text(self.directory / "agy.log")
+        ) or reported_model(read_tail_text(self.directory / "terminal.log"))
+        if label is None:
+            if time.monotonic() - self.launched_monotonic >= MODEL_REPORT_GRACE_SECONDS:
+                self._record_model_check("not_reported", None, None)
+            return None
+        requested = str(self.state.get("model") or "")
+        requested_label = str(self.state.get("model_display_name") or "")
+        if label.casefold() in {requested.casefold(), requested_label.casefold()}:
+            effective: str | None = requested
+        else:
+            # Only a label agy itself publishes counts as a substitution. A
+            # label that maps to no model means the UI was misread, and that
+            # must not fail a healthy Run; it is recorded for inspection.
+            effective = runtime.model_id_for_label(label)
+        if effective is None:
+            check = "unrecognized"
+        elif not requested or effective == requested:
+            check = "matched"
+        else:
+            check = "mismatch"
+        self._record_model_check(check, effective, label)
+        if check != "mismatch":
+            return None
+        return (
+            "model_mismatch",
+            (
+                f"Antigravity is running {label!r} but the Run requested "
+                f"{requested!r}; stopped before it spent another model's quota"
+            ),
+            {
+                "requested_model": requested,
+                "requested_model_label": requested_label or None,
+                "effective_model": effective,
+                "effective_model_label": label,
+            },
+        )
+
+    def _record_model_check(
+        self,
+        check: str,
+        effective: str | None,
+        label: str | None,
+    ) -> None:
+        """Persist the model check; flag one the bridge could not confirm.
+
+        Failing on an unconfirmed model would stop healthy Runs whenever agy
+        changes its log or UI wording, so that case is surfaced as a
+        model_unverified attention event for the caller to judge instead.
+        """
+        self.effective_model_check = check
+        self.state["effective_model"] = effective
+        with suppress(Exception):
+            runtime.update_state(
+                self.run_id,
+                effective_model=effective,
+                effective_model_label=label,
+                effective_model_check=check,
+            )
+        self._log("effective_model", model=effective, label=label, check=check)
+        if check not in {"not_reported", "unrecognized"}:
+            return
+        next_call = harness_contract.terminal_observe_call(self.run_id)
+        session_events.append_event(
+            self.directory,
+            "model_unverified",
+            {
+                "category": "model",
+                "severity": "warning",
+                "source": "runner",
+                "dedupe_key": f"model_unverified:{self.run_id}",
+                "observed": {
+                    "activity_state": "working",
+                    "effective_model_check": check,
+                    "requested_model": self.state.get("model"),
+                    "effective_model_label": label,
+                    "detail": (
+                        "agy has not named the model it is running"
+                        if check == "not_reported"
+                        else "agy named a model that agy models does not list"
+                    ),
+                    "suggested_next_tool": next_call["tool"],
+                    "suggested_next_arguments": next_call["arguments"],
+                },
+            },
+        )
+
+    def _observe_fatal_provider(self) -> tuple[str, str, dict[str, object]] | None:
+        """Fail a Run whose terminal shows an error agy cannot recover from.
+
+        Exhausted quota leaves agy idle at its prompt with the transcript
+        frozen, which otherwise reads as a healthy running Run until someone
+        cancels it.
+        """
+        now = time.monotonic()
+        if now < self.next_fatal_provider_check_at:
+            return None
+        self.next_fatal_provider_check_at = now + FATAL_PROVIDER_CHECK_SECONDS
+        return _fatal_provider_failure(
+            core.confirmed_fatal_provider_health(self.directory)
+        )
 
     def _hard_timeout_seconds(self) -> float:
         timeout = float(int(self.state["timeout_seconds"]) + 30)
@@ -741,6 +898,7 @@ class RunSupervisor:
         """Turn an Agy error left in a live tmux shell into a terminal failure."""
         if not self.session:
             return None
+        pane = None
         with suppress(terminal.TmuxCommandError):
             pane = terminal.capture_pane(self.session, timeout_seconds=0.2)
         if not pane:
@@ -877,13 +1035,31 @@ class RunSupervisor:
                 result=outcome.result,
                 error=workspace_error,
             )
-        self._finish(
+        fatal = (
+            None
+            if outcome.status == "canceled"
+            else _fatal_provider_failure(
+                core.confirmed_fatal_provider_health(self.directory)
+            )
+        )
+        if fatal is not None:
+            reason, error, detail = fatal
+            self._finish(
+                status="failed",
+                result=outcome.result,
+                error=error,
+                return_code=return_code,
+                failure_reason=reason,
+                failure_detail=detail,
+            )
+            return 1
+        status = self._finish(
             status=outcome.status,
             result=outcome.result,
             error=outcome.error,
             return_code=return_code,
         )
-        return 0 if outcome.status == "completed" else 1
+        return 1 if status == "failed" else 0
 
     def _stop(self, *, reason: str = "unspecified") -> None:
         """Terminate the tmux session, recording why.
@@ -915,7 +1091,32 @@ class RunSupervisor:
         result: str | None = None,
         error: str | None = None,
         return_code: int | None = None,
-    ) -> None:
+        failure_reason: str | None = None,
+        failure_detail: dict[str, object] | None = None,
+    ) -> str:
+        """Persist the terminal outcome and return the status recorded.
+
+        Every outcome, failures included, records what changed in the
+        workspace. A successful Run that was expected to edit files and
+        changed none is recorded as failed with failure_reason no_edits.
+        """
+        record = workspace_changes.changes_since_baseline(self.directory)
+        if (
+            status == "completed"
+            and self.state.get("expect_edits")
+            and record.changes is not None
+            and not record.changes["files"]
+        ):
+            status = "failed"
+            failure_reason = "no_edits"
+            error = (
+                "Run reported completion but changed no files in its git "
+                "workspace (expect_edits=true)"
+            )
+        outcome_fields: dict[str, Any] = record.state_fields()
+        if self.effective_model_check is None:
+            # agy exited before naming a model, so the check never ran.
+            outcome_fields["effective_model_check"] = "not_reported"
         path = self.directory / "final-result.txt"
         temporary = self.directory / ".final-result.txt.tmp"
         if status == "completed" and result is not None:
@@ -929,6 +1130,9 @@ class RunSupervisor:
             result=result,
             result_source=self.completion_source if result else None,
             error=error,
+            failure_reason=failure_reason,
+            failure_detail=failure_detail,
+            **outcome_fields,
             finished_at=finished_at,
         )
         if isinstance(updated, dict):
@@ -939,7 +1143,7 @@ class RunSupervisor:
             ):
                 with suppress(OSError):
                     temporary.unlink()
-                return
+                return str(updated.get("status"))
         if status == "completed" and result is not None:
             os.replace(temporary, path)
             path.chmod(0o600)
@@ -952,22 +1156,44 @@ class RunSupervisor:
             return_code=return_code,
             conversation=self.conversation_id,
             error=error,
+            failure_reason=failure_reason,
         )
+        payload: dict[str, object] = {
+            "status": status,
+            "return_code": return_code,
+            "error": error,
+        }
+        if failure_reason is not None:
+            payload["failure_reason"] = failure_reason
+            payload["failure_detail"] = failure_detail
         session_events.append_event(
             self.directory,
             _terminal_event_kind(status),
-            {
-                "status": status,
-                "return_code": return_code,
-                "error": error,
-            },
+            payload,
         )
+        return status
 
     def _return_code(self) -> int | None:
         return TmuxSession(
             self.directory,
             session_name=self.session,
         ).returncode
+
+
+def _fatal_provider_failure(
+    health: dict[str, object] | None,
+) -> tuple[str, str, dict[str, object]] | None:
+    """Turn confirmed fatal provider health into a failure triple."""
+    if health is None:
+        return None
+    status = health["status"]
+    detail = {key: value for key, value in health.items() if key != "status"}
+    reset = f"; resets in {health['reset_in']}" if health.get("reset_in") else ""
+    return (
+        str(status),
+        f"Antigravity reported its model quota is exhausted{reset}",
+        detail,
+    )
 
 
 def _terminal_event_kind(status: str) -> str:

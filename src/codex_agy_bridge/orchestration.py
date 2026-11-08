@@ -10,9 +10,6 @@ from typing import Any
 from codex_agy_bridge import core
 from codex_agy_bridge import terminal as terminal
 from codex_agy_bridge._orchestrator import (
-    DEFAULT_MODEL as DEFAULT_MODEL,
-)
-from codex_agy_bridge._orchestrator import (
     DEFAULT_WAIT_TIMEOUT_SECONDS as DEFAULT_WAIT_TIMEOUT_SECONDS,
 )
 from codex_agy_bridge._orchestrator import (
@@ -119,7 +116,7 @@ def create_run(
     timeout_seconds: int,
     conversation_id: str | None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
     execution_mode: str = "print",
@@ -131,6 +128,7 @@ def create_run(
     expected_file: str | None = None,
     stale_timeout_seconds: int = 300,
     stale_action: str = "notify",
+    expect_edits: bool = False,
 ) -> RunState:
     """Start a new asynchronous Antigravity conversation or reuse duplicate.
 
@@ -140,13 +138,16 @@ def create_run(
         timeout_seconds: Hard execution limit in seconds.
         conversation_id: Thread conversation identifier or None.
         dangerously_skip_permissions: Must be true; skip user-interaction prompts.
-        model: Name of the LLM model to request.
+        model: Model ID or exact display name from ``agy models``; None
+            resolves the configured default. Unknown names are rejected.
         sandbox: Forward the Antigravity CLI sandbox policy hint; not
             filesystem containment.
         additional_directories: Forward validated CLI directory hints; not
             filesystem boundaries.
         goal_id: Optional parent goal ID.
         target_name: Optional target identifier.
+        expect_edits: Fail an otherwise successful Run with failure_reason
+            no_edits when its git workspace has no changed files.
     Returns:
         The created or reused RunState dict.
     """
@@ -168,6 +169,7 @@ def create_run(
         expected_file=expected_file,
         stale_timeout_seconds=stale_timeout_seconds,
         stale_action=stale_action,
+        expect_edits=expect_edits,
     )
 
 
@@ -283,7 +285,7 @@ def review_commit(
     timeout_seconds: int = 900,
     conversation_id: str | None = None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -314,7 +316,7 @@ def review_branch(
     timeout_seconds: int = 900,
     conversation_id: str | None = None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -344,7 +346,7 @@ def review_files(
     timeout_seconds: int = 900,
     conversation_id: str | None = None,
     dangerously_skip_permissions: bool = True,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -417,7 +419,7 @@ def create_goal(
     objective: str,
     workspace: str,
     max_parallel: int = 2,
-    model: str | None = DEFAULT_MODEL,
+    model: str | None = None,
     sandbox: bool = False,
     additional_directories: list[str] | None = None,
     dangerously_skip_permissions: bool = True,

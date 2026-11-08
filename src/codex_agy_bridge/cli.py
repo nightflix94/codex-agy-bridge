@@ -16,12 +16,27 @@ from typing import Any
 
 from codex_agy_bridge import core
 
+DEFAULT_MODEL_PREFERENCE = "gemini-3.8-flash-high"
+DEFAULT_MODEL_ENV = "AGY_BRIDGE_DEFAULT_MODEL"
+
 
 @dataclass(frozen=True)
 class CliCapabilities:
     sandbox: bool
     additional_directories: bool
     interactive: bool
+
+
+@dataclass(frozen=True)
+class ModelEntry:
+    """One model published by ``agy models`` as an "<id>, TAB, <name>" row."""
+
+    id: str
+    display_name: str
+
+
+class UnknownModelError(ValueError):
+    """A model name that the live ``agy models`` list does not publish."""
 
 
 class AntigravityCli:
@@ -76,6 +91,11 @@ class AntigravityCli:
         return self._capabilities
 
     def models(self, *, refresh: bool = False) -> list[str]:
+        """Return the published model lines, cached for model_cache_seconds.
+
+        ``agy models`` prints a "Fetching available models..." progress line
+        before the "<id>\t<Display Name>" rows; only the rows are models.
+        """
         with self._models_lock:
             now = time.monotonic()
             if (
@@ -83,9 +103,68 @@ class AntigravityCli:
                 or self._models is None
                 or now - self._models_observed_at >= self.model_cache_seconds
             ):
-                self._models = self._nonempty_lines(self._run("models"))
+                self._models = [
+                    line
+                    for line in self._nonempty_lines(self._run("models"))
+                    if _MODEL_LINE_RE.fullmatch(line)
+                ]
                 self._models_observed_at = now
             return list(self._models)
+
+    def model_catalog(self, *, refresh: bool = False) -> list[ModelEntry]:
+        catalog = []
+        for line in self.models(refresh=refresh):
+            match = _MODEL_LINE_RE.fullmatch(line)
+            if match:
+                catalog.append(
+                    ModelEntry(id=match.group(1), display_name=match.group(2).strip())
+                )
+        return catalog
+
+    def resolve_model(self, name: str) -> ModelEntry:
+        """Map a model ID or display name to exactly one published model.
+
+        A miss refreshes the cached list once, since agy may have published
+        the model after the cache was filled. Anything still unmatched, or a
+        name that maps to more than one model, is rejected: agy itself would
+        silently substitute its own default model and spend that quota.
+        """
+        if not isinstance(name, str) or not name.strip():
+            raise UnknownModelError("model must be a non-empty string")
+        catalog = self.model_catalog()
+        matches = _model_matches(catalog, name)
+        if not matches:
+            catalog = self.model_catalog(refresh=True)
+            matches = _model_matches(catalog, name)
+        if len(matches) == 1:
+            return matches[0]
+        valid = ", ".join(entry.id for entry in catalog) or "(agy listed no models)"
+        if matches:
+            raise UnknownModelError(
+                f"ambiguous Antigravity model: {name!r} names "
+                f"{', '.join(entry.id for entry in matches)}. "
+                f"Pass one model ID: {valid}"
+            )
+        raise UnknownModelError(
+            f"unknown Antigravity model: {name!r}. Valid model IDs: {valid}"
+        )
+
+    def default_model(self) -> ModelEntry:
+        """Resolve the configured default model against the live model list."""
+        configured = os.environ.get(DEFAULT_MODEL_ENV)
+        preference = configured if configured is not None else DEFAULT_MODEL_PREFERENCE
+        try:
+            return self.resolve_model(preference)
+        except UnknownModelError as error:
+            source = (
+                f"{DEFAULT_MODEL_ENV}={configured!r}"
+                if configured is not None
+                else f"built-in default {DEFAULT_MODEL_PREFERENCE!r}"
+            )
+            raise UnknownModelError(
+                f"default model from {source} is not available: {error}. "
+                f"Set {DEFAULT_MODEL_ENV} to one of the valid IDs or pass model."
+            ) from error
 
     def authentication_status(self) -> dict[str, Any]:
         """Probe runtime authentication without trusting cached model names."""
@@ -163,25 +242,6 @@ class AntigravityCli:
             "valid": completed.returncode == 0,
             "output": output.strip(),
         }
-
-    def validate_model(self, model: str) -> None:
-        if model not in self._model_identifiers():
-            raise ValueError(f"unknown Antigravity model: {model}")
-
-    def _model_identifiers(self) -> set[str]:
-        """Return every spelling that names an available model.
-
-        ``agy models`` prints one "<id>\t<Display Name>" line per model, and
-        callers name a model by either half. Comparing against the whole line
-        matches neither, which rejected every model that actually exists.
-        """
-        identifiers: set[str] = set()
-        for line in self.models():
-            for field in line.split("\t"):
-                candidate = field.strip()
-                if candidate:
-                    identifiers.add(candidate)
-        return identifiers
 
     def build_run_command(
         self,
@@ -270,3 +330,13 @@ class AntigravityCli:
     @staticmethod
     def _nonempty_lines(output: str) -> list[str]:
         return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+_MODEL_LINE_RE = re.compile(r"(\S+)\t(\S.*)")
+
+
+def _model_matches(catalog: list[ModelEntry], name: str) -> list[ModelEntry]:
+    """Return every model whose ID or display name is exactly ``name``."""
+    return [
+        entry for entry in catalog if name in {entry.id, entry.display_name}
+    ]

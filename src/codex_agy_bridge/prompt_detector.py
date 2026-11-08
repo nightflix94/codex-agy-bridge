@@ -1,4 +1,4 @@
-"""Detect stable user-attention prompts from transcript and tmux output."""
+"""Detect stable user-attention prompts and status markers in agy output."""
 
 from __future__ import annotations
 
@@ -37,6 +37,23 @@ TRUST_PATTERNS = [
     r"requires permission to read, edit, and execute files here",
 ]
 MAX_SOURCE_CHARS = 20_000
+# agy names the model it is actually running in two places: the startup
+# banner ("Antigravity CLI 1.5.3", account, then "Gemini 3.8 Flash (High)")
+# and the status footer ("? for shortcutsGemini 3.8 Flash · high").
+MODEL_BANNER_RE = re.compile(
+    r"Antigravity CLI \d[^\n]*\n[^\n]*\n[\s\u2580-\u259f]*(?P<name>\S[^\n]*?)[ \t]*$",
+    re.MULTILINE,
+)
+# agy's runtime log names the model it selected, e.g. model_config_manager.go:
+# 375] Propagating selected model override to backend: label="Gemini 4 ...".
+MODEL_OVERRIDE_RE = re.compile(
+    r"model_config_manager\.go:\d+\] Propagating selected model override to "
+    r'backend: label="(?P<name>[^"\n]+)"'
+)
+MODEL_FOOTER_RE = re.compile(
+    r"for shortcuts\s*(?P<name>\S[^\n\u00b7]*?) \u00b7 (?P<level>[A-Za-z]+)[ \t]*$",
+    re.MULTILINE,
+)
 
 PROMPT_REGEXES = [re.compile(pattern) for pattern in APPROVAL_PATTERNS]
 AUTH_REGEXES = [re.compile(pattern, re.IGNORECASE) for pattern in AUTH_PATTERNS]
@@ -184,7 +201,7 @@ class PromptDetector:
         if candidate is not None:
             return candidate
 
-        terminal_text = _read_text(self.run_dir / "terminal.log")
+        terminal_text = read_tail_text(self.run_dir / "terminal.log")
         candidate = _candidate_from_text("terminal_log", terminal_text)
         if candidate is not None:
             return candidate
@@ -213,7 +230,8 @@ def _records_text(records: Sequence[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
-def _read_text(path: Path) -> str:
+def read_tail_text(path: Path) -> str:
+    """Return the bounded, decoded tail of one terminal evidence file."""
     try:
         with path.open("rb") as handle:
             try:
@@ -281,9 +299,32 @@ def _candidate_from_text(source: SourceName, text: str) -> PromptCandidate | Non
     return PromptCandidate(source=source, prompt=prompt, text_fingerprint=fingerprint)
 
 
+def reported_model(text: str) -> str | None:
+    """Return the model display name agy most recently reported.
+
+    Recognizes agy's runtime-log model selection line as well as the UI.
+
+    The footer abbreviates "Gemini 3.8 Flash (High)" to "Gemini 3.8 Flash ·
+    high"; it is expanded back to the display-name form ``agy models`` uses.
+    agy redraws the footer ending in a bare carriage return, so carriage
+    returns are line breaks here rather than "erase this line".
+    """
+    text = _strip_terminal_controls(text)
+    latest: tuple[int, str] | None = None
+    for regex in (MODEL_OVERRIDE_RE, MODEL_BANNER_RE):
+        for match in regex.finditer(text):
+            if latest is None or match.start() > latest[0]:
+                latest = (match.start(), match.group("name"))
+    for match in MODEL_FOOTER_RE.finditer(text):
+        if latest is None or match.start() > latest[0]:
+            name = f"{match.group('name')} ({match.group('level').capitalize()})"
+            latest = (match.start(), name)
+    return latest[1] if latest is not None else None
+
+
 def _strip_terminal_controls(text: str) -> str:
     text = ANSI_ESCAPE_RE.sub("", text)
-    return text.replace("\r", "\n").replace("\b", "")
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\b", "")
 
 
 def _suffix_still_looks_like_active_prompt(suffix: str) -> bool:

@@ -440,8 +440,22 @@ UTF8_MAX_CODEPOINT_BYTES = 4
 ARTIFACT_PATH_RE = re.compile(
     r"(?<![\w/.-])(?:[\w.-]+/)*[\w.-]+\."
     r"(?:md|txt|json|yaml|yml|csv|tsv|html|htm|xml|log|patch|diff)"
-    r"(?![\w/.-])"
+    # A sentence-ending period may follow; a longer extension may not.
+    r"(?![\w/-]|\.\w)"
 )
+# Any source or document file a report might claim to have touched.
+MENTIONED_PATH_RE = re.compile(
+    r"(?<![\w/.-])(?:[\w.-]+/)*[\w.-]+\."
+    r"(?:py|pyi|md|rst|txt|json|jsonl|yaml|yml|toml|ini|cfg|lock|js|jsx|cjs|mjs"
+    r"|ts|tsx|vue|svelte|go|rs|java|kt|rb|php|c|h|cc|cpp|hpp|cs|swift|sh|zsh"
+    r"|sql|css|scss|html|htm|xml|csv|tsv|patch|diff)"
+    # A sentence-ending period may follow; a longer extension may not.
+    r"(?![\w/-]|\.\w)",
+    re.IGNORECASE,
+)
+PROMPT_FRAGMENT_SHINGLE_WORDS = 4
+PROMPT_FRAGMENT_MIN_SHINGLES = 3
+PROMPT_FRAGMENT_THRESHOLD = 0.8
 
 
 def result_artifact_path(run_dir: Path) -> Path:
@@ -588,6 +602,16 @@ def discard_artifact(run_dir: Path) -> None:
         result_artifact_path(run_dir).unlink()
 
 
+def _path_mentions(text: str, pattern: re.Pattern[str]) -> list[str]:
+    """Return distinct path-like strings in text, in order of appearance."""
+    mentions: list[str] = []
+    for match in pattern.finditer(text):
+        raw_path = match.group(0).strip("`'\"()[]{}<>.,:;")
+        if raw_path and raw_path not in mentions and "://" not in raw_path:
+            mentions.append(raw_path)
+    return mentions
+
+
 def mentioned_artifacts(
     state: RunState,
     response: str,
@@ -598,12 +622,7 @@ def mentioned_artifacts(
         return []
     workspace_path = Path(workspace).resolve()
     artifacts: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for match in ARTIFACT_PATH_RE.finditer(response):
-        raw_path = match.group(0).strip("`'\"()[]{}<>.,:;")
-        if not raw_path or raw_path in seen or "://" in raw_path:
-            continue
-        seen.add(raw_path)
+    for raw_path in _path_mentions(response, ARTIFACT_PATH_RE):
         candidate = Path(raw_path)
         artifact_path = (
             candidate.resolve()
@@ -623,6 +642,101 @@ def mentioned_artifacts(
             }
         )
     return artifacts
+
+
+def unverified_mentions(
+    state: RunState,
+    response: str,
+    changes: Mapping[str, Any],
+) -> dict[str, Any]:
+    """List file paths a report names that are absent from its changed files.
+
+    Heuristic: a report legitimately names files it only read, and a path
+    regex both misses and over-matches. Each entry is a prompt to check, not
+    proof the report is wrong.
+    """
+    repo_root = Path(str(changes["repo_root"])).resolve()
+    roots = [repo_root]
+    if state.get("workspace"):
+        roots.append(Path(str(state["workspace"])).resolve())
+    changed = [str(item["path"]) for item in changes["files"]]
+    paths = []
+    for raw_path in _path_mentions(response, MENTIONED_PATH_RE):
+        # A mention may be repo-relative, workspace-relative, absolute, or a
+        # bare file name; it is verified if any reading names a changed file.
+        names = {raw_path.removeprefix("./")}
+        for root in roots:
+            with suppress(ValueError, OSError):
+                resolved = (root / raw_path).resolve()
+                names.add(resolved.relative_to(repo_root).as_posix())
+        if not any(
+            path in names or any(path.endswith(f"/{name}") for name in names)
+            for path in changed
+        ):
+            paths.append(raw_path)
+    return {
+        "heuristic": True,
+        "description": (
+            "File paths named in the final report that are not in the Run's "
+            "changed files. A report may name files it only read; treat each "
+            "as something to check, not as an error."
+        ),
+        "paths": paths,
+    }
+
+
+def prompt_fragment_warning(prompt: str, response: str) -> dict[str, Any] | None:
+    """Warn when a result is mostly text copied from the Run's own prompt.
+
+    Overlap is the share of the result's 4-word sequences that also occur in
+    the prompt. Runs that stalled have returned a slice of their task packet
+    as their "result"; that is reported as a warning, never a failure.
+    """
+    result_shingles = _word_shingles(response)
+    if len(result_shingles) < PROMPT_FRAGMENT_MIN_SHINGLES:
+        return None
+    overlap = len(result_shingles & _word_shingles(prompt)) / len(result_shingles)
+    if overlap < PROMPT_FRAGMENT_THRESHOLD:
+        return None
+    return {
+        "kind": "prompt_fragment",
+        "overlap": round(overlap, 3),
+        "threshold": PROMPT_FRAGMENT_THRESHOLD,
+        "message": (
+            "The result is mostly a copy of the Run's prompt; the agent may "
+            "not have produced a real answer."
+        ),
+    }
+
+
+def _word_shingles(text: str) -> set[tuple[str, ...]]:
+    words = re.findall(r"\w+", text.casefold())
+    size = PROMPT_FRAGMENT_SHINGLE_WORDS
+    starts = range(len(words) - size + 1)
+    return {tuple(words[start : start + size]) for start in starts}
+
+
+def verification(state: RunState, response: str | None) -> dict[str, Any]:
+    """Project the objective change record and report checks for one Run."""
+    terminal = state["status"] in TERMINAL_STATUSES
+    changes = state.get("changes")
+    if "changes" in state:
+        reason = state.get("changes_unavailable_reason")
+    elif terminal:
+        reason = "change accounting was not recorded for this run"
+    else:
+        reason = "run has not finished"
+    warning = prompt_fragment_warning(str(state.get("prompt") or ""), response or "")
+    return {
+        "changes": changes,
+        "changes_unavailable_reason": None if changes is not None else reason,
+        "warnings": [warning] if warning is not None else [],
+        "unverified_mentions": (
+            unverified_mentions(state, response, changes)
+            if response and changes is not None
+            else None
+        ),
+    }
 
 
 WaitCondition = Literal[
@@ -660,6 +774,7 @@ SUPPORTED_CONDITIONS = tuple(sorted({*CANONICAL_CONDITIONS, *CONDITION_ALIASES})
 
 ATTENTION_EVENTS = {
     "needs_attention",
+    "model_unverified",
     "mcp_input_failed",
     "progress_stalled",
     "stale_confirmed",
@@ -968,6 +1083,7 @@ def _compact_runs(
             )
             status = state["status"]
             error = state.get("error")
+            failure_reason = state.get("failure_reason")
             conversation_id = state.get("conversation_id")
             finished_at = state.get("finished_at")
             observer = observation or RunObservation(
@@ -987,6 +1103,7 @@ def _compact_runs(
         except Exception as error_value:
             status = "failed"
             error = f"Run state unavailable: {error_value}"
+            failure_reason = None
             conversation_id = None
             finished_at = None
             snapshot = {
@@ -1017,6 +1134,7 @@ def _compact_runs(
             "terminal_tail_available": snapshot["terminal_tail_available"],
             "conversation_id": conversation_id,
             "error": error,
+            "failure_reason": failure_reason,
             "finished_at": finished_at,
         }
     return runs
@@ -1450,6 +1568,9 @@ class RunObservation:
                     include_tail=include_terminal_tail,
                 ),
                 "provider_health": core.run_provider_health(evidence.run_dir),
+                "failure_reason": state.get("failure_reason"),
+                "effective_model": state.get("effective_model"),
+                "effective_model_check": state.get("effective_model_check"),
             }
         return {"run_ids": run_ids, "runs": runs}
 
@@ -1479,12 +1600,28 @@ class RunObservation:
 
     def result(self, run_id: str) -> dict[str, Any]:
         state = self.load_state(run_id)
+        run_dir = self.run_dir(run_id)
+        result = metadata(state, run_dir)
+        response = state.get("result")
+        if response is None and result is not None:
+            response = read_chunk(state, run_dir, max_bytes=RESULT_READ_MAX_BYTES)[
+                "content"
+            ]
         return {
             "run_id": run_id,
             "status": state["status"],
             "conversation_id": state.get("conversation_id"),
-            "result": metadata(state, self.run_dir(run_id)),
+            "result": result,
             "error": state.get("error"),
+            "failure_reason": state.get("failure_reason"),
+            "failure_detail": state.get("failure_detail"),
+            "model": state.get("model"),
+            "effective_model": state.get("effective_model"),
+            "effective_model_check": state.get("effective_model_check"),
+            **verification(
+                state,
+                core.clean_response(response, state.get("completion_marker")),
+            ),
         }
 
     def result_read(

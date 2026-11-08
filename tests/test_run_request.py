@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from codex_agy_bridge.cli import ModelEntry, UnknownModelError
 from codex_agy_bridge.run_request import RunRequest
 
 
@@ -17,9 +18,13 @@ class FakeCli:
             },
         )()
 
-    def validate_model(self, model):
-        if model == "missing":
-            raise ValueError("unknown model")
+    def resolve_model(self, name):
+        if name == "missing":
+            raise UnknownModelError("unknown model")
+        return ModelEntry(id=name, display_name=f"{name} (High)")
+
+    def default_model(self):
+        return ModelEntry(id="default", display_name="Default (High)")
 
 
 class NonInteractiveCli(FakeCli):
@@ -42,7 +47,6 @@ def test_run_request_prepares_identity_and_initial_state(tmp_path):
         conversation_id=None,
         dangerously_skip_permissions=True,
         model=None,
-        default_model="default",
         sandbox=True,
         additional_directories=[str(extra)],
         execution_mode="print",
@@ -104,7 +108,6 @@ def test_run_request_normalizes_expected_file_inside_workspace(tmp_path):
         conversation_id=None,
         dangerously_skip_permissions=True,
         model=None,
-        default_model="default",
         sandbox=False,
         additional_directories=[],
         execution_mode="print",
@@ -147,7 +150,6 @@ def test_run_request_rejects_expected_file_outside_workspace(tmp_path):
             conversation_id=None,
             dangerously_skip_permissions=True,
             model=None,
-            default_model="default",
             sandbox=False,
             additional_directories=[],
             execution_mode="print",
@@ -176,7 +178,6 @@ def test_run_request_rejects_disabled_dangerous_permission_skip(tmp_path):
             conversation_id=None,
             dangerously_skip_permissions=False,
             model=None,
-            default_model="default",
             sandbox=False,
             additional_directories=[],
             execution_mode="print",
@@ -199,7 +200,6 @@ def test_interactive_run_request_does_not_add_completion_marker(tmp_path):
         conversation_id=None,
         dangerously_skip_permissions=True,
         model=None,
-        default_model="default",
         sandbox=False,
         additional_directories=[],
         execution_mode="interactive",
@@ -236,7 +236,6 @@ def test_foreground_task_requires_prompt_interactive_support(tmp_path):
             conversation_id=None,
             dangerously_skip_permissions=True,
             model=None,
-            default_model="default",
             sandbox=False,
             additional_directories=[],
             execution_mode="print",
@@ -263,7 +262,6 @@ def test_run_request_rejects_duplicate_additional_directories(tmp_path):
             conversation_id=None,
             dangerously_skip_permissions=True,
             model=None,
-            default_model="default",
             sandbox=False,
             additional_directories=[str(extra), str(extra)],
             execution_mode="print",
@@ -288,7 +286,6 @@ def test_run_request_rejects_nul_prompt(tmp_path):
             conversation_id=None,
             dangerously_skip_permissions=True,
             model=None,
-            default_model="default",
             sandbox=False,
             additional_directories=[],
             execution_mode="print",
@@ -313,7 +310,6 @@ def test_run_request_rejects_oversized_prompt(tmp_path):
             conversation_id=None,
             dangerously_skip_permissions=True,
             model=None,
-            default_model="default",
             sandbox=False,
             additional_directories=[],
             execution_mode="print",
@@ -336,7 +332,6 @@ def test_run_request_rejects_blank_workspace(workspace):
             conversation_id=None,
             dangerously_skip_permissions=True,
             model=None,
-            default_model="default",
             sandbox=False,
             additional_directories=[],
             execution_mode="print",
@@ -365,7 +360,6 @@ def test_run_request_rejects_unsafe_conversation_id(tmp_path, conversation_id):
             conversation_id=conversation_id,
             dangerously_skip_permissions=True,
             model=None,
-            default_model="default",
             sandbox=False,
             additional_directories=[],
             execution_mode="print",
@@ -393,7 +387,6 @@ def test_additional_directory_order_is_canonical(tmp_path):
         conversation_id=None,
         dangerously_skip_permissions=True,
         model=None,
-        default_model="default",
         sandbox=False,
         additional_directories=[str(first), str(second)],
         execution_mode="print",
@@ -411,7 +404,6 @@ def test_additional_directory_order_is_canonical(tmp_path):
         conversation_id=None,
         dangerously_skip_permissions=True,
         model=None,
-        default_model="default",
         sandbox=False,
         additional_directories=[str(second), str(first)],
         execution_mode="print",
@@ -437,7 +429,6 @@ def test_stale_policy_is_validated_persisted_and_part_of_request_identity(tmp_pa
         "conversation_id": None,
         "dangerously_skip_permissions": True,
         "model": None,
-        "default_model": "default",
         "sandbox": False,
         "additional_directories": [],
         "execution_mode": "print",

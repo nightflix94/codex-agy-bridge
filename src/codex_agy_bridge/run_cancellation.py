@@ -12,7 +12,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from codex_agy_bridge import core, run_lifecycle, run_results, session_events
+from codex_agy_bridge import (
+    core,
+    run_lifecycle,
+    run_results,
+    session_events,
+    workspace_changes,
+)
 from codex_agy_bridge.execution import ExecutionSession
 from codex_agy_bridge.process import ProcessManager
 from codex_agy_bridge.state import ACTIVE_STATUSES, RunState
@@ -79,6 +85,7 @@ class RunCanceler:
                 "result": None,
                 "error": None,
                 "finished_at": core.utc_now(),
+                **workspace_changes.changes_since_baseline(directory).state_fields(),
             },
         )
         state = cancel_ack["state"]

@@ -57,6 +57,7 @@ MCP client
   -> _orchestrator.py: RunnerOrchestrator.create_run()
   -> run_request.py: RunRequest.prepare()
        validate input and CLI capabilities
+       resolve model against `agy models` (cli.py: resolve_model/default_model)
        normalize paths and policy
        compute canonical request_key
   -> RunStore.list_active_runs()                     dedup/capacity
@@ -66,11 +67,15 @@ MCP client
 [detached process]
   -> runner.py: main()
   -> supervision.py: RunSupervisor.execute()
+  -> workspace_changes.py: capture_baseline()        read-only git snapshot
   -> execution.py: TmuxSession.start()
   -> terminal.py: launch()
   -> Antigravity CLI
   -> TranscriptHarvester.poll()
-  -> RunStore.update_run()                           terminal state
+  -> prompt_detector.reported_model(agy.log, terminal) effective_model / model_mismatch
+  -> core.confirmed_fatal_provider_health()          quota_exhausted (screen + agy.log)
+  -> workspace_changes.py: changes_since_baseline()  changes / no_edits
+  -> RunStore.update_run()                           terminal state + failure_reason
 ```
 
 The start lock covers deduplication, capacity, and persistence. Process spawn
@@ -183,6 +188,16 @@ and transcript compatibility; `diagnostics.py` contains bounded probes; and
  MCP and diagnostics
 - extra fields could be silently ignored; CLI probe failures could cascade
 + tool arguments reject extras; probes are bounded and failure-isolated
+
+ Run status a lead agent can trust
+- unknown model names reached agy, which silently swapped in its default
++ models resolve against `agy models`; unknown names are rejected at start
++ the model agy reports on screen is recorded; a mismatch fails the Run
+- quota exhaustion left a Run "running" with a frozen transcript
++ the provider-health classifier recognizes agy's quota warning; the Run fails
++ only when agy.log's own error line agrees, so echoed text cannot trigger it
+- a Run that edited nothing could complete successfully
++ git change accounting on every Run; expect_edits turns none into no_edits
 ```
 
 ## Safety Invariants
@@ -195,5 +210,8 @@ and transcript compatibility; `diagnostics.py` contains bounded probes; and
 - Reject dead-session input rather than queueing work that cannot be consumed.
 - Treat `sandbox` and additional directories as CLI policy hints, never as
   filesystem containment.
+- Workspace change accounting is read-only: never stash, reset, stage, or
+  commit, and keep baseline copies in the Run directory, not the workspace.
+- Never pass a model name to `agy` that `agy models` does not publish.
 - Inspect affected call paths before editing shared symbols and review the
   final diff before committing.

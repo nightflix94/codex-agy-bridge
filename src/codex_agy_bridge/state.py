@@ -56,6 +56,23 @@ class RunState(TypedDict, total=False):
     execution_surface: ExecutionSurface
     human_attachable: bool
     model: str
+    model_display_name: str
+    # The model agy reports in its terminal banner/footer after start; None
+    # until observed, or when the reported label maps to no published model.
+    effective_model: str | None
+    effective_model_label: str | None
+    # matched, mismatch, unrecognized (label not in agy models), or
+    # not_reported (agy never named its model); None while still pending.
+    effective_model_check: str | None
+    expect_edits: bool
+    # Machine-readable cause for a failed Run: model_mismatch,
+    # quota_exhausted, or no_edits. None for other or older failures.
+    failure_reason: str | None
+    failure_detail: dict[str, Any] | None
+    # Files the Run changed in its git workspace; None with
+    # changes_unavailable_reason when that could not be determined.
+    changes: dict[str, Any] | None
+    changes_unavailable_reason: str | None
     goal_id: str | None
     target_name: str | None
     request_key: str

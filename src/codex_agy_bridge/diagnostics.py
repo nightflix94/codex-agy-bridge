@@ -14,10 +14,9 @@ from typing import Any
 from codex_agy_bridge import core
 from codex_agy_bridge._orchestrator import (
     DEFAULT_MAX_PARALLEL,
-    DEFAULT_MODEL,
     _global_max_parallel,
 )
-from codex_agy_bridge.cli import AntigravityCli
+from codex_agy_bridge.cli import AntigravityCli, UnknownModelError
 from codex_agy_bridge.run_control_snapshot import RunControlSnapshot
 
 _CLI = AntigravityCli()
@@ -29,11 +28,19 @@ def models(
     cli: AntigravityCli | None = None,
 ) -> dict[str, Any]:
     adapter = cli or _CLI
-    available = adapter.models(refresh=refresh)
+    catalog = adapter.model_catalog(refresh=refresh)
+    try:
+        default_model: str | None = adapter.default_model().id
+        default_model_error = None
+    except UnknownModelError as error:
+        default_model = None
+        default_model_error = str(error)
     return {
         "cli_version": adapter.version(),
-        "models": available,
-        "default_model": available[0] if available else DEFAULT_MODEL,
+        "models": [f"{entry.id}\t{entry.display_name}" for entry in catalog],
+        "model_ids": [entry.id for entry in catalog],
+        "default_model": default_model,
+        "default_model_error": default_model_error,
         "observed_at": datetime.now(UTC).isoformat(),
     }
 
